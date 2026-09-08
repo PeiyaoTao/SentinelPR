@@ -112,7 +112,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
         target_line = finding.end_line
 
         comment_body = (
-            f"### 🛡️ SentinelPR: {finding.title}\n"
+            f"### SentinelPR: {finding.title}\n"
             f"**Severity**: `{finding.severity.value}` | **Category**: `{finding.category.value}` | **Zone**: `{finding.trust_zone.value}`\n\n"
             f"{finding.explanation}\n\n"
         )
@@ -144,7 +144,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
     rejected_count = total_candidates - accepted_count
 
     summary_lines = [
-        "## 🛡️ SentinelPR Quality Gate Report",
+        "## SentinelPR Quality Gate Report",
         f"**Summary**: Evaluated {total_candidates} candidate findings. "
         f"**{accepted_count} Accepted**, **{rejected_count} Filtered by Adversarial Critic**.\n",
     ]
@@ -159,7 +159,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
         summary_lines.append("")
 
     if out_of_hunk_notes:
-        summary_lines.append("### 📌 Context Observations (Outside Diff Hunks)")
+        summary_lines.append("### Context Observations (Outside Diff Hunks)")
         for note in out_of_hunk_notes:
             summary_lines.append(f"- **{note['path']}:{note['line']}**: {note['body'].splitlines()[0]}")
         summary_lines.append("")
