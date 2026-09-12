@@ -9,6 +9,7 @@ from sentinel.agents.anti_bloat import anti_bloat_agent_node
 from sentinel.agents.consolidator import consolidator_agent_node
 from sentinel.agents.critic import critic_agent_node
 from sentinel.agents.logic import logic_agent_node
+from sentinel.agents.risk import risk_agent_node
 from sentinel.agents.security import security_agent_node
 from sentinel.agents.test_synthesizer import test_synthesis_node
 from sentinel.agents.triage import triage_agent_node
@@ -19,7 +20,7 @@ def create_sentinel_graph():
     """
     Compiles the SentinelPR StateGraph.
     Flow:
-      START -> triage -> [logic, security, anti_bloat] in parallel
+      START -> triage -> [logic, security, anti_bloat, risk] in parallel
             -> test_synthesizer (fan-in)
             -> critic
             -> consolidator
@@ -32,6 +33,7 @@ def create_sentinel_graph():
     builder.add_node("logic", logic_agent_node)
     builder.add_node("security", security_agent_node)
     builder.add_node("anti_bloat", anti_bloat_agent_node)
+    builder.add_node("risk", risk_agent_node)
     builder.add_node("test_synthesizer", test_synthesis_node)
     builder.add_node("critic", critic_agent_node)
     builder.add_node("consolidator", consolidator_agent_node)
@@ -43,11 +45,13 @@ def create_sentinel_graph():
     builder.add_edge("triage", "logic")
     builder.add_edge("triage", "security")
     builder.add_edge("triage", "anti_bloat")
+    builder.add_edge("triage", "risk")
 
     # Fan-In to Test Synthesizer
     builder.add_edge("logic", "test_synthesizer")
     builder.add_edge("security", "test_synthesizer")
     builder.add_edge("anti_bloat", "test_synthesizer")
+    builder.add_edge("risk", "test_synthesizer")
 
     # Pipeline Continuation
     builder.add_edge("test_synthesizer", "critic")
@@ -78,6 +82,7 @@ def review_pr(
         "candidate_findings": [],
         "repro_tests": {},
         "verified_findings": [],
+        "risk_assessment": None,
         "consolidated_report": None,
     }
 

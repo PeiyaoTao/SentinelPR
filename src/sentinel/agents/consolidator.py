@@ -164,6 +164,15 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
             summary_lines.append(f"- **{note['path']}:{note['line']}**: {note['body'].splitlines()[0]}")
         summary_lines.append("")
 
+    risk_assessment = state.get("risk_assessment")
+    if risk_assessment:
+        summary_lines.append("### PR Risk & Blast Radius")
+        summary_lines.append(f"- **Risk Level**: `{risk_assessment.risk_level.value}`")
+        summary_lines.append(f"- **Complexity Delta**: `{risk_assessment.cyclomatic_complexity}` decision points")
+        summary_lines.append(f"- **Total Churn**: `{risk_assessment.total_churn_lines}` lines")
+        summary_lines.append(f"- **Perimeter Exposed**: `{risk_assessment.perimeter_symbols_count}` public symbols")
+        summary_lines.append(f"- **Test Coverage Included**: `{'Yes' if risk_assessment.has_test_coverage else 'No'}`\n")
+
     summary_markdown = "\n".join(summary_lines)
     sarif = generate_sarif(verified_findings)
 
@@ -175,6 +184,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
         total_findings_count=total_candidates,
         accepted_findings_count=accepted_count,
         rejected_findings_count=rejected_count,
+        risk_assessment=risk_assessment,
     )
 
     return {"consolidated_report": report}

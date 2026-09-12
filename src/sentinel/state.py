@@ -30,6 +30,25 @@ class FindingCategory(str, Enum):
     LOGIC = "LOGIC"
     SECURITY = "SECURITY"
     ANTI_BLOAT = "ANTI_BLOAT"
+    RISK = "RISK"
+
+
+class RiskLevel(str, Enum):
+    """Risk tiers for PR blast radius and complexity."""
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class RiskAssessment(BaseModel):
+    """Assessment of overall pull request risk, blast radius, and test coverage."""
+    risk_level: RiskLevel = RiskLevel.LOW
+    cyclomatic_complexity: int = 0
+    total_churn_lines: int = 0
+    perimeter_symbols_count: int = 0
+    has_test_coverage: bool = True
+    summary: str = ""
 
 
 class ProofStatus(str, Enum):
@@ -97,6 +116,7 @@ class ConsolidatedReport(BaseModel):
     total_findings_count: int = 0
     accepted_findings_count: int = 0
     rejected_findings_count: int = 0
+    risk_assessment: Optional[RiskAssessment] = None
 
 
 class PRReviewState(TypedDict):
@@ -113,4 +133,5 @@ class PRReviewState(TypedDict):
     candidate_findings: Annotated[List[Finding], operator.add]
     repro_tests: Dict[str, str]  # finding_id -> test_code
     verified_findings: List[Finding]
+    risk_assessment: Optional[RiskAssessment]
     consolidated_report: Optional[ConsolidatedReport]
