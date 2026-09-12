@@ -152,6 +152,104 @@ for comment in report.inline_comments:
 
 ---
 
+## GitHub PR Automated Review (GitHub Actions)
+
+SentinelPR operates as an automated GitHub Pull Request quality gate. When configured in your repository, SentinelPR triggers whenever a PR is opened, updated, or reopened, analyzes the diff against surrounding code, and posts high-signal reviews.
+
+### Features in GitHub Reviews
+
+- **Zero-Noise Approvals**: If a PR is clean and adheres to standards, SentinelPR approves the PR with an executive summary and posts 0 inline nitpicks.
+- **1-Click Interactive Suggestions**: Actionable findings include GitHub native `suggestion` blocks on the **Files changed** tab, allowing authors to commit verified fixes directly in the browser.
+- **PR Risk & Blast Radius Analysis**: Every review quantifies cyclomatic complexity deltas, lines of churn, public perimeter symbol exposure, and verifies whether matching unit tests were added.
+- **Engine Transparency**: Review comments clearly state the active LLM provider and model tier.
+
+### Step-by-Step GitHub Setup Guide
+
+#### Step 1: Add the Workflow File
+
+Create `.github/workflows/sentinel_review.yml` in your repository:
+
+```yaml
+name: SentinelPR Auto Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install SentinelPR
+        run: |
+          pip install -e .
+
+      - name: Run SentinelPR Automated Review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
+          SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || secrets.SENTINEL_BASE_URL || '' }}
+          FAST_MODEL: ${{ vars.FAST_MODEL || secrets.FAST_MODEL || '' }}
+          FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || secrets.FRONTIER_MODEL || '' }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -m sentinel.github
+```
+
+#### Step 2: Grant Workflow Permissions
+
+GitHub Actions requires write permissions to publish review comments:
+1. In your GitHub repository, go to **Settings** -> **Actions** -> **General**.
+2. Scroll to **Workflow permissions**.
+3. Select **Read and write permissions**.
+4. Check **Allow GitHub Actions to create and approve pull requests**.
+5. Click **Save**.
+
+#### Step 3: Add API Keys to Repository Secrets
+
+SentinelPR auto-detects cloud providers based on the secrets present in your repository:
+1. Go to **Settings** -> **Secrets and variables** -> **Actions** -> **Secrets** tab.
+2. Click **New repository secret** and add your provider key:
+   - `DEEPSEEK_API_KEY`: For DeepSeek.
+   - `OPENAI_API_KEY`: For OpenAI (`gpt-4o-mini`, `gpt-4o`).
+   - `GEMINI_API_KEY`: For Google Gemini (`gemini-2.0-flash`).
+3. If no secrets are defined, SentinelPR defaults to deterministic AST heuristics or local Ollama.
+
+#### Step 4: Configure the Two-Tier Model Architecture (Repository Variables)
+
+SentinelPR uses a two-tier model system to optimize latency and cost:
+- **`FAST_MODEL`**: Runs high-throughput initial scanning across all changed files, AST symbols, risk analysis, and review summaries.
+- **`FRONTIER_MODEL`**: Runs the Adversarial Critic Gate and test synthesis sandbox, conducting deep reasoning only on candidate findings.
+
+To configure models:
+1. Go to **Settings** -> **Secrets and variables** -> **Actions** -> **Variables** tab.
+2. Click **New repository variable**:
+
+| Variable | Recommended Value (DeepSeek) | Alternative (OpenAI / Gemini) | Role |
+| :--- | :--- | :--- | :--- |
+| **`FAST_MODEL`** | `deepseek-flash` | `gpt-4o-mini` / `gemini-2.0-flash` | High-speed, cost-efficient pass across entire PR. |
+| **`FRONTIER_MODEL`** | `deepseek-v4-pro` | `gpt-4o` / `deepseek-reasoner` | Deep reasoning pass for critic verification & repro test generation. |
+| **`SENTINEL_BASE_URL`** | *(Optional)* | Custom proxy URL | For self-hosted gateways, vLLM, or OpenRouter. |
+
+---
+
 ## Testing & Benchmarks
 
 SentinelPR includes comprehensive unit tests and a Day-1 synthetic evaluation benchmark suite:
