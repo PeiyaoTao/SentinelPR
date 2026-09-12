@@ -76,6 +76,20 @@ def print_colored_report(report: ConsolidatedReport, verified_findings: List[Fin
     print(f"  {COLOR_GRAY}Total Evaluated         : {report.total_findings_count}{COLOR_RESET}")
     print(f"  {COLOR_GRAY}Filtered by Critic Gate : {report.rejected_findings_count}{COLOR_RESET}")
 
+    if report.risk_assessment:
+        risk = report.risk_assessment
+        from sentinel.state import RiskLevel
+        risk_color = (
+            COLOR_RED
+            if risk.risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
+            else (COLOR_YELLOW if risk.risk_level == RiskLevel.MEDIUM else COLOR_GREEN)
+        )
+        print(f"  {COLOR_BOLD}PR Risk Level           : {risk_color}{risk.risk_level.value}{COLOR_RESET}")
+        print(f"  {COLOR_GRAY}Complexity Delta        : {risk.cyclomatic_complexity} branches{COLOR_RESET}")
+        print(f"  {COLOR_GRAY}Perimeter Exposed       : {risk.perimeter_symbols_count} public symbols{COLOR_RESET}")
+        test_color = COLOR_GREEN if risk.has_test_coverage else COLOR_RED
+        print(f"  {COLOR_GRAY}Tests Included          : {test_color}{'Yes' if risk.has_test_coverage else 'No'}{COLOR_RESET}")
+
     print("\nDetailed Findings:")
     print("-" * 65)
 

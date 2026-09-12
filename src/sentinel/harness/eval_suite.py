@@ -80,6 +80,13 @@ SYNTHETIC_PRS: List[Dict[str, Any]] = [
             +    if request is None or not request.json:
             +        return {"error": "Invalid request"}, 400
                  return {"status": "ok"}
+            diff --git a/tests/test_checkout.py b/tests/test_checkout.py
+            new file mode 100644
+            --- /dev/null
+            +++ b/tests/test_checkout.py
+            @@ -0,0 +1,2 @@
+            +def test_checkout_validation():
+            +    pass
         """).strip(),
         "head_files": {
             "api/checkout.py": textwrap.dedent("""
@@ -91,10 +98,11 @@ SYNTHETIC_PRS: List[Dict[str, Any]] = [
                     if request is None or not request.json:
                         return {"error": "Invalid request"}, 400
                     return {"status": "ok"}
-            """).strip()
+            """).strip(),
+            "tests/test_checkout.py": "def test_checkout_validation(): pass\n",
         },
         "expected_categories": [],
-        "expected_findings_count": 0,  # Protected by Trust Boundary!
+        "expected_findings_count": 0,  # Protected by Trust Boundary and has tests!
     },
     {
         "id": "CASE-04-SQL-INJECTION",
@@ -108,13 +116,21 @@ SYNTHETIC_PRS: List[Dict[str, Any]] = [
              def get_user(cursor, user_id):
             +    cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
                  return cursor.fetchone()
+            diff --git a/tests/test_users.py b/tests/test_users.py
+            new file mode 100644
+            --- /dev/null
+            +++ b/tests/test_users.py
+            @@ -0,0 +1,2 @@
+            +def test_get_user():
+            +    pass
         """).strip(),
         "head_files": {
             "api/users.py": textwrap.dedent("""
                 def get_user(cursor, user_id):
                     cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
                     return cursor.fetchone()
-            """).strip()
+            """).strip(),
+            "tests/test_users.py": "def test_get_user(): pass\n",
         },
         "expected_categories": [FindingCategory.SECURITY],
         "expected_findings_count": 1,
@@ -141,6 +157,29 @@ SYNTHETIC_PRS: List[Dict[str, Any]] = [
         },
         "expected_categories": [],
         "expected_findings_count": 0,
+    },
+    {
+        "id": "CASE-06-UNTESTED-PERIMETER-RISK",
+        "title": "PR modifying public API route without accompanying tests (High Blast Radius)",
+        "diff": textwrap.dedent("""
+            diff --git a/api/v1/auth.py b/api/v1/auth.py
+            index 1212121..3434343 100644
+            --- a/api/v1/auth.py
+            +++ b/api/v1/auth.py
+            @@ -1,3 +1,4 @@
+             def login(credentials):
+            +    # Modify login route with no tests
+                 return {"token": "session_token"}
+        """).strip(),
+        "head_files": {
+            "api/v1/auth.py": textwrap.dedent("""
+                def login(credentials):
+                    # Modify login route with no tests
+                    return {"token": "session_token"}
+            """).strip()
+        },
+        "expected_categories": [FindingCategory.RISK],
+        "expected_findings_count": 1,
     },
 ]
 
