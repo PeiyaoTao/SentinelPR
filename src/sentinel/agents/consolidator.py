@@ -3,8 +3,9 @@ Consolidator Agent: Validates diff-hunk line offsets (preventing GitHub 422 erro
 and generates GitHub PR comments and standard SARIF 2.1.0 output.
 """
 
-from typing import Any, Dict, List, Set
 import json
+import logging
+from typing import Any, Dict, List, Set
 
 from sentinel.state import (
     ConsolidatedReport,
@@ -12,6 +13,8 @@ from sentinel.state import (
     Finding,
     PRReviewState,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_hunk_line_ranges(hunks: List[DiffHunk]) -> Dict[str, Set[int]]:
@@ -171,8 +174,8 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
             llm_summary = client.complete([{"role": "user", "content": prompt}]).strip()
             if llm_summary:
                 summary_lines.append(f"> **Reviewer Assessment**: {llm_summary}\n")
-Catch the specific expected exception type and log it, or allow it to propagate.
-            pass
+        except (RuntimeError, ValueError, KeyError) as err:
+            logger.warning("Could not generate executive review summary: %s", err)
 
     if verified_findings:
         summary_lines.append("| Category | Severity | File | Line | Title |")

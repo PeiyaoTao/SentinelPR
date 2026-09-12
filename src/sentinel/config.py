@@ -103,22 +103,30 @@ def load_config_from_env() -> SentinelConfig:
         cfg.provider = provider.lower()
     elif deepseek_key:
         cfg.provider = "deepseek"
-        cfg.api_key = deepseek_key
-        cfg.base_url = "https://api.deepseek.com/v1"
-        cfg.fast_model = os.getenv("FAST_MODEL", "deepseek-chat")
-        cfg.frontier_model = os.getenv("FRONTIER_MODEL", "deepseek-chat")
     elif openai_key:
         cfg.provider = "openai"
-        cfg.api_key = openai_key
-        cfg.base_url = "https://api.openai.com/v1"
-        cfg.fast_model = os.getenv("FAST_MODEL", "gpt-4o-mini")
-        cfg.frontier_model = os.getenv("FRONTIER_MODEL", "gpt-4o")
     elif gemini_key:
         cfg.provider = "gemini"
-        cfg.api_key = gemini_key
-        cfg.fast_model = os.getenv("FAST_MODEL", "gemini-2.0-flash")
-        cfg.frontier_model = os.getenv("FRONTIER_MODEL", "gemini-2.0-flash")
 
+    # Set provider-specific defaults
+    if cfg.provider == "deepseek":
+        cfg.api_key = deepseek_key or os.getenv("SENTINEL_API_KEY", "")
+        cfg.base_url = "https://api.deepseek.com/v1"
+        cfg.fast_model = "deepseek-chat"
+        cfg.frontier_model = "deepseek-chat"
+    elif cfg.provider == "openai":
+        cfg.api_key = openai_key or os.getenv("SENTINEL_API_KEY", "")
+        cfg.base_url = "https://api.openai.com/v1"
+        cfg.fast_model = "gpt-4o-mini"
+        cfg.frontier_model = "gpt-4o"
+    elif cfg.provider == "gemini":
+        cfg.api_key = gemini_key or os.getenv("SENTINEL_API_KEY", "")
+        cfg.fast_model = "gemini-2.0-flash"
+        cfg.frontier_model = "gemini-2.0-flash"
+
+    # Explicit environment overrides always take precedence
+    if os.getenv("SENTINEL_API_KEY"):
+        cfg.api_key = os.getenv("SENTINEL_API_KEY")
     if os.getenv("SENTINEL_BASE_URL"):
         cfg.base_url = os.getenv("SENTINEL_BASE_URL")
     if os.getenv("FAST_MODEL"):
