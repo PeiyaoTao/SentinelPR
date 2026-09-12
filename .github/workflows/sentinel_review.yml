@@ -31,6 +31,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
+          SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || secrets.SENTINEL_BASE_URL || '' }}
+          FAST_MODEL: ${{ vars.FAST_MODEL || secrets.FAST_MODEL || '' }}
+          FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || secrets.FRONTIER_MODEL || '' }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
