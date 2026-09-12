@@ -117,7 +117,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
             f"{finding.explanation}\n\n"
         )
         if finding.suggested_fix:
-            comment_body += f"**Suggested Fix**:\n```python\n{finding.suggested_fix}\n```\n\n"
+            comment_body += f"```suggestion\n{finding.suggested_fix}\n```\n\n"
         if finding.critic_reasoning:
             comment_body += f"> *Critic Gate Verdict: {finding.critic_reasoning}*"
 
