@@ -143,11 +143,36 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
     total_candidates = len(candidate_findings)
     rejected_count = total_candidates - accepted_count
 
+    from sentinel.config import default_config
+
+    engine_name = default_config.provider.capitalize()
+    model_name = default_config.fast_model
+    status_label = "Clean (Approved)" if not verified_findings else f"{accepted_count} Action(s) Required"
+
     summary_lines = [
         "## SentinelPR Quality Gate Report",
-        f"**Summary**: Evaluated {total_candidates} candidate findings. "
-        f"**{accepted_count} Accepted**, **{rejected_count} Filtered by Adversarial Critic**.\n",
+        f"**Engine**: {engine_name} (`{model_name}`) | **Evaluated**: {total_candidates} candidate findings | **Status**: {status_label}\n",
     ]
+
+    # Executive qualitative review from LLM when enabled
+    if default_config.provider != "heuristics":
+        try:
+            from sentinel.llm import get_llm_client
+            client = get_llm_client(tier="fast")
+            diff_text = state.get("diff", "")
+            risk_val = risk_assessment.risk_level.value if risk_assessment else "LOW"
+            prompt = (
+                f"You are SentinelPR, a senior staff code reviewer. Write a concise 2-sentence executive review summary for this PR.\n"
+                f"Defects Found: {accepted_count}\n"
+                f"Risk Level: {risk_val}\n"
+                f"Diff excerpt:\n{diff_text[:1200]}\n"
+                "Be direct, constructive, and concise."
+            )
+            llm_summary = client.complete([{"role": "user", "content": prompt}]).strip()
+            if llm_summary:
+                summary_lines.append(f"> **Reviewer Assessment**: {llm_summary}\n")
+        except Exception:
+            pass
 
     if verified_findings:
         summary_lines.append("| Category | Severity | File | Line | Title |")
