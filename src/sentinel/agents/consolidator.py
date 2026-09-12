@@ -171,7 +171,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
             llm_summary = client.complete([{"role": "user", "content": prompt}]).strip()
             if llm_summary:
                 summary_lines.append(f"> **Reviewer Assessment**: {llm_summary}\n")
-        except Exception:
+Catch the specific expected exception type and log it, or allow it to propagate.
             pass
 
     if verified_findings:
