@@ -66,7 +66,12 @@ class LLMClient:
         endpoint = f"{self.base_url.rstrip('/')}/chat/completions"
 
         try:
-            response = requests.post(endpoint, json=payload, headers=headers, timeout=60)
+            response = requests.post(
+                endpoint,
+                json=payload,
+                headers=headers,
+                timeout=default_config.llm_timeout_seconds,
+            )
             response.raise_for_status()
             data = response.json()
             return data["choices"][0]["message"]["content"]

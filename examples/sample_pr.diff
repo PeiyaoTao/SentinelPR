@@ -1,0 +1,10 @@
+diff --git a/services/payment_service.py b/services/payment_service.py
+index 1000001..1000002 100644
+--- a/services/payment_service.py
++++ b/services/payment_service.py
+@@ -4,4 +4,6 @@ class PaymentProcessor:
+ 
+     def process_transaction(self, user_id: str, items=[]):
++        # Mutates default argument across calls
++        items.append("tx_fee")
+         return {"user": user_id, "processed": items}

@@ -68,6 +68,65 @@ def evaluate_candidate_finding(finding: Finding) -> Finding:
     return finding
 
 
+import json
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+from sentinel.config import default_config
+from sentinel.llm import get_llm_client
+
+
+def consult_llm_critic(finding: Finding, state: PRReviewState) -> Optional[Tuple[CriticDecision, str]]:
+    """
+    Consults the configured LLM (e.g. local Ollama or cloud model) as adversarial defense counsel.
+    Returns (decision, reasoning) or None if LLM call is unavailable or fails.
+    """
+    if default_config.provider == "heuristics":
+        return None
+
+    client = get_llm_client(tier="frontier")
+    file_code = state.get("head_files", {}).get(finding.file_path, "")
+
+    prompt = f"""You are the Adversarial Critic Gate for an autonomous code review system.
+Your role is to act as defense counsel for the PR author, rigorously filtering out false positives, nitpicks, and incorrect accusations.
+
+Candidate Finding to Review:
+- File: {finding.file_path} (Lines {finding.start_line}-{finding.end_line})
+- Category: {finding.category.value}
+- Severity: {finding.severity.value}
+- Title: {finding.title}
+- Explanation: {finding.explanation}
+- Trust Zone: {finding.trust_zone.value}
+
+Relevant Source Code:
+```python
+{file_code}
+```
+
+Instructions:
+1. If this finding points out a genuine defect, concurrency bug, security issue, or fail-fast anti-bloat violation, output decision "ACCEPT".
+2. If this finding is a false alarm, harmless code, or an invalid accusation, output decision "REJECT" with your justification.
+3. Respond in valid JSON with format:
+{{"decision": "ACCEPT" or "REJECT", "reason": "brief explanation"}}
+"""
+
+    try:
+        raw = client.complete([{"role": "user", "content": prompt}], json_mode=True)
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            decision_str = data.get("decision", "").upper()
+            reason = data.get("reason", "LLM review completed.")
+            if decision_str == "ACCEPT":
+                return CriticDecision.ACCEPT, f"Accepted by LLM Critic: {reason}"
+            elif decision_str == "REJECT":
+                return CriticDecision.REJECT, f"Rejected by LLM Critic: {reason}"
+    except Exception:
+        return None
+
+    return None
+
+
 def critic_agent_node(state: PRReviewState) -> Dict[str, Any]:
     """
     LangGraph node: Audits all candidate findings in a single batched pass.
@@ -83,6 +142,13 @@ def critic_agent_node(state: PRReviewState) -> Dict[str, Any]:
             continue
 
         evaluated_finding = evaluate_candidate_finding(finding)
+
+        # Consult LLM Critic if an LLM provider is active
+        if default_config.provider != "heuristics":
+            llm_result = consult_llm_critic(evaluated_finding, state)
+            if llm_result is not None:
+                evaluated_finding.critic_decision, evaluated_finding.critic_reasoning = llm_result
+
         if evaluated_finding.critic_decision in [CriticDecision.ACCEPT, CriticDecision.DOWNGRADE]:
             verified_findings.append(evaluated_finding)
             seen_keys.add(dedup_key)

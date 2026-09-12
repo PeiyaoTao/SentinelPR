@@ -34,6 +34,10 @@ class SentinelConfig(BaseModel):
         default=0.1,
         description="Sampling temperature for LLM review consistency.",
     )
+    llm_timeout_seconds: int = Field(
+        default=180,
+        description="Timeout in seconds for LLM generation requests (useful for large local models).",
+    )
 
     # Token & PR Budgets
     max_pr_churn_lines: int = Field(

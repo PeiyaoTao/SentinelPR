@@ -116,6 +116,31 @@ def main():
             sys.exit(1)
         with open(args.diff_file, "r", encoding="utf-8", errors="replace") as f:
             diff_text = f.read()
+
+        from sentinel.agents.triage import parse_diff_hunks
+        for hunk in parse_diff_hunks(diff_text):
+            if os.path.exists(hunk.file_path) and os.path.isfile(hunk.file_path):
+                try:
+                    with open(hunk.file_path, "r", encoding="utf-8", errors="replace") as f:
+                        head_files[hunk.file_path] = f.read()
+                except Exception:
+                    pass
+            elif hunk.file_path not in head_files:
+                import textwrap
+                reconstructed_lines = []
+                # Pad empty lines up to new_start - 1 so line numbers align
+                for _ in range(max(0, hunk.new_start - 1)):
+                    reconstructed_lines.append("")
+                hunk_body = []
+                for line in hunk.content.splitlines():
+                    if line.startswith("@@") or line.startswith("-"):
+                        continue
+                    elif line.startswith("+"):
+                        hunk_body.append(line[1:])
+                    else:
+                        hunk_body.append(line[1:] if line.startswith(" ") else line)
+                dedented_body = textwrap.dedent("\n".join(hunk_body)).splitlines()
+                head_files[hunk.file_path] = "\n".join(reconstructed_lines + dedented_body)
     else:
         # Default behavior: if inside a git repo, check git status / diff
         diff_text, head_files = get_git_diff_and_files(["git", "diff", "HEAD"])
@@ -132,20 +157,17 @@ def main():
 
     result = review_pr(diff=diff_text, head_files=head_files)
     report = result.get("consolidated_report")
+    verified_findings = result.get("verified_findings", [])
 
     if report:
-        print("\n" + report.summary_markdown)
-
-        if report.inline_comments:
-            print("\n### Inline Suggestions:")
-            for comment in report.inline_comments:
-                print(f"- {comment['path']}:{comment['line']}")
+        from sentinel.formatter import print_colored_report
+        print_colored_report(report, verified_findings)
 
         if args.sarif:
             import json
             with open(args.sarif, "w", encoding="utf-8") as f:
                 json.dump(report.sarif_json, f, indent=2)
-            print(f"\nSARIF report exported to {args.sarif}")
+            print(f"SARIF report exported to {args.sarif}\n")
 
 
 if __name__ == "__main__":
