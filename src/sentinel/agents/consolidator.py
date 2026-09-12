@@ -145,6 +145,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
     accepted_count = len(verified_findings)
     total_candidates = len(candidate_findings)
     rejected_count = total_candidates - accepted_count
+    risk_assessment = state.get("risk_assessment")
 
     from sentinel.config import default_config
 
@@ -192,7 +193,6 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
             summary_lines.append(f"- **{note['path']}:{note['line']}**: {note['body'].splitlines()[0]}")
         summary_lines.append("")
 
-    risk_assessment = state.get("risk_assessment")
     if risk_assessment:
         summary_lines.append("### PR Risk & Blast Radius")
         summary_lines.append(f"- **Risk Level**: `{risk_assessment.risk_level.value}`")
