@@ -101,7 +101,8 @@ def is_ignored_file(file_path: str, patterns: List[str]) -> bool:
 
 def extract_changed_line_numbers(hunks: List[DiffHunk]) -> Dict[str, Set[int]]:
     """
-    Computes the set of modified line numbers in the *head* file for each changed file.
+    Computes the set of modified line numbers in the *head* file for each changed file,
+    including points affected by deletions.
     """
     file_lines: Dict[str, Set[int]] = {}
     for hunk in hunks:
@@ -116,8 +117,8 @@ def extract_changed_line_numbers(hunks: List[DiffHunk]) -> Dict[str, Set[int]]:
                 file_lines[hunk.file_path].add(current_line)
                 current_line += 1
             elif line.startswith("-"):
-                # Deleted line from base; doesn't advance new file line counter
-                continue
+                # Mark the insertion/deletion anchor in the head file
+                file_lines[hunk.file_path].add(max(1, current_line))
             else:
                 # Context line
                 current_line += 1
@@ -148,7 +149,7 @@ def classify_trust_zone(file_path: str, code_snippet: str) -> TrustZone:
 def slice_ast_symbols(file_path: str, full_code: str, changed_lines: Set[int]) -> List[ASTSymbolScope]:
     """
     Parses the full head file into an AST, extracts enclosing symbols (functions, classes)
-    that intersect with changed lines, and attaches relevant file-level imports.
+    that intersect with changed lines (preserving decorators), and attaches relevant file-level imports.
     """
     symbols: List[ASTSymbolScope] = []
     if not full_code.strip():
@@ -181,14 +182,22 @@ def slice_ast_symbols(file_path: str, full_code: str, changed_lines: Set[int]) -
             end = node.end_lineno if hasattr(node, "end_lineno") and node.end_lineno else node.lineno
             imports.append("\n".join(lines[start:end]))
 
+    covered_lines: Set[int] = set()
+
     # Traverse functions, async functions, and classes
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            start_line = node.lineno
-            end_line = node.end_lineno if hasattr(node, "end_lineno") and node.end_lineno else start_line
-            # Check if this node encompasses any changed lines
+            # Preserve decorators: start_line should include the first decorator
+            if getattr(node, "decorator_list", None):
+                start_line = min(d.lineno for d in node.decorator_list)
+            else:
+                start_line = node.lineno
+
+            end_line = node.end_lineno if hasattr(node, "end_lineno") and node.end_lineno else node.lineno
             node_range = set(range(start_line, end_line + 1))
+
             if node_range.intersection(changed_lines):
+                covered_lines.update(node_range)
                 snippet = "\n".join(lines[start_line - 1 : end_line])
                 symbol_type = "class" if isinstance(node, ast.ClassDef) else "function"
                 trust_zone = classify_trust_zone(file_path, snippet)
@@ -206,11 +215,11 @@ def slice_ast_symbols(file_path: str, full_code: str, changed_lines: Set[int]) -
                     )
                 )
 
-    # If changes occurred outside any function/class (e.g., top-level script statements),
-    # construct a module-level symbol
-    if not symbols and changed_lines:
-        start_line = min(changed_lines)
-        end_line = max(changed_lines)
+    # Capture changed lines outside any function/class (e.g., top-level secrets, globals, statements)
+    uncovered_changed_lines = changed_lines - covered_lines
+    if uncovered_changed_lines:
+        start_line = min(uncovered_changed_lines)
+        end_line = max(uncovered_changed_lines)
         symbols.append(
             ASTSymbolScope(
                 symbol_name="module_scope",
@@ -218,7 +227,7 @@ def slice_ast_symbols(file_path: str, full_code: str, changed_lines: Set[int]) -
                 file_path=file_path,
                 start_line=start_line,
                 end_line=end_line,
-                code_snippet="\n".join(lines[max(0, start_line - 5) : min(len(lines), end_line + 5)]),
+                code_snippet="\n".join(lines[max(0, start_line - 3) : min(len(lines), end_line + 3)]),
                 trust_zone=classify_trust_zone(file_path, full_code),
                 imports=imports,
             )

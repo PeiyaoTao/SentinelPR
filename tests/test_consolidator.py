@@ -109,3 +109,37 @@ def test_generate_sarif():
     assert len(run["results"]) == 1
     assert run["results"][0]["level"] == "error"
     assert run["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "auth.py"
+
+
+def test_consolidator_dual_model_display():
+    from sentinel.config import default_config
+
+    old_fast = default_config.fast_model
+    old_frontier = default_config.frontier_model
+    try:
+        default_config.fast_model = "deepseek-flash"
+        default_config.frontier_model = "deepseek-v4-pro"
+
+        state: PRReviewState = {
+            "diff": "",
+            "base_files": {},
+            "head_files": {},
+            "changed_files": ["app.py"],
+            "hunks": [],
+            "symbols": [],
+            "candidate_findings": [],
+            "repro_tests": {},
+            "verified_findings": [],
+            "consolidated_report": None,
+        }
+
+        result = consolidator_agent_node(state)
+        report = result["consolidated_report"]
+        assert "Fast: `deepseek-flash` | Frontier: `deepseek-v4-pro`" in report.summary_markdown
+
+        default_config.frontier_model = "deepseek-flash"
+        result2 = consolidator_agent_node(state)
+        assert "(`deepseek-flash`)" in result2["consolidated_report"].summary_markdown
+    finally:
+        default_config.fast_model = old_fast
+        default_config.frontier_model = old_frontier

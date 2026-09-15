@@ -66,3 +66,60 @@ def test_classify_trust_zone():
     assert classify_trust_zone("domain/order.py", "@app.route('/order')") == TrustZone.PERIMETER
     assert classify_trust_zone("domain/order.py", "def calculate_tax(): pass") == TrustZone.INTERNAL_CORE
     assert classify_trust_zone("clients/stripe_client.py", "def charge(): pass") == TrustZone.INTER_MODULE
+
+
+def test_slice_ast_symbols_preserves_decorators_and_perimeter_classification():
+    code = """from flask import Flask
+app = Flask(__name__)
+
+@app.route("/auth/login")
+def login_handler():
+    return {"status": "ok"}
+"""
+    # Changed line inside function body (line 6)
+    symbols = slice_ast_symbols("domain/auth.py", code, {6})
+    assert len(symbols) == 1
+    sym = symbols[0]
+    assert sym.symbol_name == "login_handler"
+    # Decorator starts at line 4
+    assert sym.start_line == 4
+    assert sym.end_line == 6
+    assert "@app.route" in sym.code_snippet
+    # Classified as PERIMETER even though file path is domain/auth.py
+    assert sym.trust_zone == TrustZone.PERIMETER
+
+
+def test_deletion_only_hunk_produces_analyzed_symbol():
+    from sentinel.agents.triage import parse_diff_hunks
+    code = """def process_items(items):
+    for x in items:
+        process(x)
+    return True
+"""
+    # Simulated deletion diff: deleted a 'break' statement at line 3
+    deletion_diff = """--- a/worker.py
++++ b/worker.py
+@@ -3,2 +3,1 @@
+-        break
+         process(x)
+"""
+    hunks = parse_diff_hunks(deletion_diff)
+    changed_lines = extract_changed_line_numbers(hunks)
+    assert 3 in changed_lines["worker.py"]
+
+    symbols = slice_ast_symbols("worker.py", code, changed_lines["worker.py"])
+    assert len(symbols) == 1
+    assert symbols[0].symbol_name == "process_items"
+
+
+def test_mixed_module_and_function_edits_captures_both():
+    code = """API_KEY = "sk-secret-12345"
+
+def do_work():
+    return 42
+"""
+    # Change at line 1 (API_KEY) and line 4 (return 42)
+    symbols = slice_ast_symbols("app.py", code, {1, 4})
+    symbol_names = [s.symbol_name for s in symbols]
+    assert "do_work" in symbol_names
+    assert "module_scope" in symbol_names

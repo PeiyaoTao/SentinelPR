@@ -4,7 +4,7 @@ public perimeter exposure, and missing test coverage risks.
 """
 
 import ast
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 from sentinel.state import (
@@ -14,6 +14,7 @@ from sentinel.state import (
     PRReviewState,
     ProofStatus,
     RiskAssessment,
+    RiskIndicator,
     RiskLevel,
     Severity,
     TrustZone,
@@ -43,22 +44,42 @@ def compute_symbol_cyclomatic_complexity(symbol: ASTSymbolScope) -> int:
     return complexity
 
 
+def is_test_file(path: str) -> bool:
+    """Identifies whether a file path belongs to a test suite."""
+    norm = path.replace("\\", "/").lower()
+    parts = norm.split("/")
+    filename = parts[-1]
+    in_test_dir = any(p in ["tests", "test", "__tests__"] for p in parts[:-1])
+    is_test_filename = filename.startswith("test_") or filename.endswith("_test.py") or filename == "test.py"
+    return in_test_dir or is_test_filename
+
+
+def compute_churn(hunks: List[Any]) -> int:
+    """Calculates total line additions and deletions across all hunks (excluding context)."""
+    churn = 0
+    for hunk in hunks:
+        for line in hunk.content.splitlines():
+            if line.startswith("@@"):
+                continue
+            elif line.startswith("+") or line.startswith("-"):
+                churn += 1
+    return churn
+
+
 def evaluate_pr_risk(
     changed_files: List[str],
     symbols: List[ASTSymbolScope],
     total_churn: int,
-) -> Tuple[RiskAssessment, List[Finding]]:
+    base_files: Optional[Dict[str, str]] = None,
+) -> Tuple[RiskAssessment, List[RiskIndicator]]:
     """
-    Evaluates PR risk level, computes blast radius, and flags untested perimeter modifications.
+    Evaluates PR risk level, computes blast radius, and produces advisory risk indicators.
+    Does NOT emit blocking defects.
     """
-    findings: List[Finding] = []
+    risk_indicators: List[RiskIndicator] = []
 
-    # 1. Check for test file presence in the PR
-    test_files = [
-        f for f in changed_files
-        if "test" in f.lower() or f.startswith("tests/") or f.endswith("_test.py") or f.endswith("test.py")
-    ]
-    has_test_coverage = len(test_files) > 0
+    # 1. Check for test file presence in the PR using strict pattern matching
+    has_test_coverage = any(is_test_file(f) for f in changed_files)
 
     # 2. Total cyclomatic complexity of changed symbols
     total_complexity = sum(compute_symbol_cyclomatic_complexity(s) for s in symbols)
@@ -77,28 +98,20 @@ def evaluate_pr_risk(
     else:
         risk_level = RiskLevel.LOW
 
-    # 5. Flag Untested Public Perimeter Modifications
+    # 5. Advisory Risk Indicator for Untested Public Perimeter Modifications
     if perimeter_symbols and not has_test_coverage:
-        for symbol in perimeter_symbols:
-            findings.append(
-                Finding(
-                    id=f"RISK-{uuid.uuid4().hex[:8]}",
-                    category=FindingCategory.RISK,
-                    severity=Severity.HIGH,
-                    file_path=symbol.file_path,
-                    start_line=symbol.start_line,
-                    end_line=symbol.end_line,
-                    title=f"Untested Perimeter Modification ({symbol.symbol_name})",
-                    explanation=(
-                        f"Public perimeter symbol '{symbol.symbol_name}' was modified without accompanying "
-                        "test updates in this pull request. Changes to external API boundaries carry high "
-                        "blast radius and require automated unit or integration tests."
-                    ),
-                    suggested_fix="Add unit or integration tests verifying boundary behavior and edge cases.",
-                    trust_zone=symbol.trust_zone,
-                    proof_status=ProofStatus.STATIC_VERIFIED,
-                )
+        sym_names = ", ".join(s.symbol_name for s in perimeter_symbols[:3])
+        risk_indicators.append(
+            RiskIndicator(
+                name="Untested Perimeter Modification",
+                severity=Severity.HIGH,
+                metric_value=f"{perimeter_count} public symbol(s)",
+                description=(
+                    f"Public perimeter symbol(s) ({sym_names}) were modified without accompanying "
+                    "test updates in this pull request. Public entrypoints have high blast radius."
+                ),
             )
+        )
 
     summary_text = (
         f"PR Risk: {risk_level.value} (Churn: {total_churn} lines, "
@@ -116,27 +129,30 @@ def evaluate_pr_risk(
         summary=summary_text,
     )
 
-    return assessment, findings
+    return assessment, risk_indicators
 
 
 def risk_agent_node(state: PRReviewState) -> Dict[str, Any]:
     """
     LangGraph node: Analyzes PR blast radius, complexity delta, and missing test coverage.
-    Returns candidate findings and RiskAssessment.
+    Returns advisory risk indicators and RiskAssessment without creating blocking findings.
     """
     changed_files = state.get("changed_files", [])
     symbols = state.get("symbols", [])
     hunks = state.get("hunks", [])
+    base_files = state.get("base_files", {})
 
-    total_churn = sum(hunk.new_lines for hunk in hunks)
+    total_churn = compute_churn(hunks)
 
-    assessment, findings = evaluate_pr_risk(
+    assessment, risk_indicators = evaluate_pr_risk(
         changed_files=changed_files,
         symbols=symbols,
         total_churn=total_churn,
+        base_files=base_files,
     )
 
     return {
-        "candidate_findings": findings,
+        "candidate_findings": [],
         "risk_assessment": assessment,
+        "risk_indicators": risk_indicators,
     }
