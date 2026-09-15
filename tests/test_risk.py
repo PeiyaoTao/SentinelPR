@@ -2,8 +2,8 @@
 Tests for Risk & Blast Radius Agent.
 """
 
-from sentinel.agents.risk import compute_symbol_cyclomatic_complexity, evaluate_pr_risk
-from sentinel.state import ASTSymbolScope, FindingCategory, RiskLevel, Severity, TrustZone
+from sentinel.agents.risk import compute_churn, compute_symbol_cyclomatic_complexity, evaluate_pr_risk, is_test_file
+from sentinel.state import ASTSymbolScope, DiffHunk, RiskLevel, Severity, TrustZone
 
 
 def test_compute_cyclomatic_complexity():
@@ -25,8 +25,33 @@ def test_compute_cyclomatic_complexity():
         code_snippet=code,
     )
     complexity = compute_symbol_cyclomatic_complexity(symbol)
-    # Expected branches: base (1) + if (1) + for (1) + if (1) + and (1) + elif (1) = 6
     assert complexity >= 5
+
+
+def test_is_test_file_strict_matching():
+    # Should match valid test files
+    assert is_test_file("tests/test_api.py") is True
+    assert is_test_file("src/tests/helper.py") is True
+    assert is_test_file("tests/unit/test_auth.py") is True
+    assert is_test_file("service_test.py") is True
+
+    # Must NOT match non-test files with substring 'test'
+    assert is_test_file("contest_utils.py") is False
+    assert is_test_file("attestation.py") is False
+    assert is_test_file("domain/protest.py") is False
+
+
+def test_compute_churn_excludes_context():
+    hunk = DiffHunk(
+        file_path="app.py",
+        old_start=1,
+        old_lines=5,
+        new_start=1,
+        new_lines=5,
+        content="@@ -1,5 +1,5 @@\n context line 1\n-removed line\n+added line 1\n+added line 2\n context line 2",
+    )
+    # Hunk has 5 lines total, but only 1 removal and 2 additions = 3 churn
+    assert compute_churn([hunk]) == 3
 
 
 def test_evaluate_pr_risk_untested_perimeter_flagged():
@@ -41,7 +66,7 @@ def test_evaluate_pr_risk_untested_perimeter_flagged():
     )
     changed_files = ["api/v1/webhook.py"]
 
-    assessment, findings = evaluate_pr_risk(
+    assessment, risk_indicators = evaluate_pr_risk(
         changed_files=changed_files,
         symbols=[symbol],
         total_churn=50,
@@ -50,10 +75,9 @@ def test_evaluate_pr_risk_untested_perimeter_flagged():
     assert assessment.risk_level in [RiskLevel.HIGH, RiskLevel.CRITICAL]
     assert assessment.has_test_coverage is False
     assert assessment.perimeter_symbols_count == 1
-    assert len(findings) == 1
-    assert findings[0].category == FindingCategory.RISK
-    assert findings[0].severity == Severity.HIGH
-    assert "Untested Perimeter Modification" in findings[0].title
+    assert len(risk_indicators) == 1
+    assert risk_indicators[0].name == "Untested Perimeter Modification"
+    assert risk_indicators[0].severity == Severity.HIGH
 
 
 def test_evaluate_pr_risk_with_tests_is_low():
@@ -68,7 +92,7 @@ def test_evaluate_pr_risk_with_tests_is_low():
     )
     changed_files = ["utils/helper.py", "tests/test_helper.py"]
 
-    assessment, findings = evaluate_pr_risk(
+    assessment, risk_indicators = evaluate_pr_risk(
         changed_files=changed_files,
         symbols=[symbol],
         total_churn=10,
@@ -76,4 +100,4 @@ def test_evaluate_pr_risk_with_tests_is_low():
 
     assert assessment.risk_level == RiskLevel.LOW
     assert assessment.has_test_coverage is True
-    assert len(findings) == 0
+    assert len(risk_indicators) == 0

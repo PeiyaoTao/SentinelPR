@@ -2,7 +2,7 @@
 Graph Orchestration: LangGraph workflow compilation for SentinelPR.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from langgraph.graph import END, START, StateGraph
 
 from sentinel.agents.anti_bloat import anti_bloat_agent_node
@@ -65,12 +65,15 @@ def review_pr(
     diff: str,
     head_files: Dict[str, str],
     base_files: Dict[str, str] = None,
+    uninspected_files: List[str] = None,
 ) -> Dict[str, Any]:
     """
     High-level entry point to execute SentinelPR on a pull request.
     """
     if base_files is None:
         base_files = {}
+    if uninspected_files is None:
+        uninspected_files = []
 
     initial_state: PRReviewState = {
         "diff": diff,
@@ -83,6 +86,9 @@ def review_pr(
         "repro_tests": {},
         "verified_findings": [],
         "risk_assessment": None,
+        "risk_indicators": [],
+        "uninspected_files": uninspected_files,
+        "review_outcome": None,
         "consolidated_report": None,
     }
 

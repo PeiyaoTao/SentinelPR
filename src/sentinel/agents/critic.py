@@ -37,7 +37,16 @@ def evaluate_candidate_finding(finding: Finding) -> Finding:
             return finding
 
         finding.critic_decision = CriticDecision.ACCEPT
-        finding.critic_reasoning = "Accepted: Critical/High risk with verified static or dynamic trace."
+        if finding.proof_status == ProofStatus.REPRODUCED_DYNAMICALLY:
+            finding.critic_reasoning = "Accepted: Critical/High risk with confirmed dynamic reproduction trace."
+        elif finding.proof_status == ProofStatus.STATIC_VERIFIED:
+            finding.critic_reasoning = "Accepted: Critical/High risk verified via static AST/pattern analysis."
+        elif finding.proof_status in [ProofStatus.EXECUTION_FAILED, ProofStatus.ENV_SETUP_ERROR]:
+            finding.critic_reasoning = "Accepted: High risk evaluated under static proof standards (dynamic sandbox execution failed)."
+        elif finding.proof_status == ProofStatus.SANDBOX_UNAVAILABLE:
+            finding.critic_reasoning = "Accepted: High risk evaluated under static proof standards (container sandbox unavailable)."
+        else:
+            finding.critic_reasoning = "Accepted: High risk finding accepted under static proof standards."
         return finding
 
     # Rule 2: ANTI_BLOAT evaluation
@@ -61,6 +70,10 @@ def evaluate_candidate_finding(finding: Finding) -> Finding:
     if finding.proof_status == ProofStatus.NOT_REPRODUCED:
         finding.critic_decision = CriticDecision.REJECT
         finding.critic_reasoning = "Rejected: Finding could not be reproduced in sandbox execution."
+        return finding
+    elif finding.proof_status in [ProofStatus.EXECUTION_FAILED, ProofStatus.ENV_SETUP_ERROR, ProofStatus.SANDBOX_UNAVAILABLE]:
+        finding.critic_decision = CriticDecision.REJECT
+        finding.critic_reasoning = f"Rejected: Inconclusive dynamic proof for medium/low candidate ({finding.proof_status.value})."
         return finding
 
     finding.critic_decision = CriticDecision.ACCEPT

@@ -57,7 +57,42 @@ class ProofStatus(str, Enum):
     REPRODUCED_DYNAMICALLY = "REPRODUCED_DYNAMICALLY"
     NOT_REPRODUCED = "NOT_REPRODUCED"
     STATIC_VERIFIED = "STATIC_VERIFIED"
-    ENV_SETUP_ERROR = "ENV_SETUP_ERROR"
+    EXECUTION_FAILED = "EXECUTION_FAILED"
+    TIMEOUT = "TIMEOUT"
+    SANDBOX_UNAVAILABLE = "SANDBOX_UNAVAILABLE"
+    ENV_SETUP_ERROR = "ENV_SETUP_ERROR"  # Maintained for backward compatibility
+
+
+class EvidenceSource(str, Enum):
+    """Source of verification evidence for a finding."""
+    STATIC_AST = "STATIC_AST"
+    STATIC_PATTERN = "STATIC_PATTERN"
+    DYNAMIC_SANDBOX = "DYNAMIC_SANDBOX"
+
+
+class ReviewOutcome(str, Enum):
+    """Final operational conclusion of the review process."""
+    CLEAN = "CLEAN"
+    CHANGES_REQUIRED = "CHANGES_REQUIRED"
+    INCOMPLETE_REVIEW = "INCOMPLETE_REVIEW"
+    INFRASTRUCTURE_FAILURE = "INFRASTRUCTURE_FAILURE"
+
+
+class ExactCodeReplacement(BaseModel):
+    """Structured code replacement target with validated line boundaries."""
+    file_path: str
+    revision: str = "HEAD"
+    start_line: int
+    end_line: int
+    replacement_text: str
+
+
+class RiskIndicator(BaseModel):
+    """Advisory risk metric (non-blocking)."""
+    name: str
+    severity: Severity = Severity.LOW
+    metric_value: str
+    description: str
 
 
 class CriticDecision(str, Enum):
@@ -100,9 +135,13 @@ class Finding(BaseModel):
     title: str
     explanation: str
     suggested_fix: Optional[str] = None
+    exact_replacement: Optional[ExactCodeReplacement] = None
+    remediation_guidance: Optional[str] = None
     trust_zone: TrustZone = TrustZone.INTERNAL_CORE
+    evidence_source: EvidenceSource = EvidenceSource.STATIC_AST
     reproduction_script: Optional[str] = None
     proof_status: ProofStatus = ProofStatus.UNTESTED
+    proof_execution_log: Optional[str] = None
     critic_decision: CriticDecision = CriticDecision.ACCEPT
     critic_reasoning: Optional[str] = None
 
@@ -110,6 +149,7 @@ class Finding(BaseModel):
 class ConsolidatedReport(BaseModel):
     """Final output payload ready for GitHub and SARIF consumption."""
     summary_markdown: str
+    review_outcome: ReviewOutcome = ReviewOutcome.CLEAN
     inline_comments: List[Dict[str, Any]] = Field(default_factory=list)
     out_of_hunk_notes: List[Dict[str, Any]] = Field(default_factory=list)
     sarif_json: Dict[str, Any] = Field(default_factory=dict)
@@ -117,9 +157,11 @@ class ConsolidatedReport(BaseModel):
     accepted_findings_count: int = 0
     rejected_findings_count: int = 0
     risk_assessment: Optional[RiskAssessment] = None
+    risk_indicators: List[RiskIndicator] = Field(default_factory=list)
+    uninspected_files: List[str] = Field(default_factory=list)
 
 
-class PRReviewState(TypedDict):
+class PRReviewState(TypedDict, total=False):
     """
     Shared graph state for LangGraph execution.
     Uses Annotated[list, operator.add] to enable safe concurrent fan-out worker updates.
@@ -134,4 +176,7 @@ class PRReviewState(TypedDict):
     repro_tests: Dict[str, str]  # finding_id -> test_code
     verified_findings: List[Finding]
     risk_assessment: Optional[RiskAssessment]
+    risk_indicators: Annotated[List[RiskIndicator], operator.add]
+    uninspected_files: Annotated[List[str], operator.add]
+    review_outcome: Optional[ReviewOutcome]
     consolidated_report: Optional[ConsolidatedReport]

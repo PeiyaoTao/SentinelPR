@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 import requests
 
 from sentinel.graph import review_pr
-from sentinel.state import Severity
+from sentinel.state import ReviewOutcome, Severity
 
 
 def run_github_auto_review():
@@ -47,30 +47,46 @@ def run_github_auto_review():
     diff_resp.raise_for_status()
     diff_text = diff_resp.text
 
-    # Fetch changed file contents from head workspace
-    files_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/files"
-    files_resp = requests.get(files_url, headers={"Authorization": f"token {token}"}, timeout=30)
-    files_resp.raise_for_status()
-    changed_files = files_resp.json()
+    # Fetch all changed files with pagination
+    changed_files: List[Dict[str, Any]] = []
+    page = 1
+    api_headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+    while True:
+        files_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/files?page={page}&per_page=100"
+        files_resp = requests.get(files_url, headers=api_headers, timeout=30)
+        files_resp.raise_for_status()
+        data = files_resp.json()
+        if not data:
+            break
+        changed_files.extend(data)
+        if len(data) < 100 or "next" not in files_resp.links:
+            break
+        page += 1
 
     head_files: Dict[str, str] = {}
+    uninspected_files: List[str] = []
     for f in changed_files:
         filename = f.get("filename")
-        if filename and os.path.exists(filename) and os.path.isfile(filename):
+        if not filename:
+            continue
+        if os.path.exists(filename) and os.path.isfile(filename):
             try:
                 with open(filename, "r", encoding="utf-8", errors="replace") as fh:
                     head_files[filename] = fh.read()
             except Exception:
-                pass
+                uninspected_files.append(filename)
+        else:
+            if f.get("status") != "removed":
+                uninspected_files.append(filename)
 
     # Run SentinelPR review
-    result = review_pr(diff=diff_text, head_files=head_files)
+    result = review_pr(diff=diff_text, head_files=head_files, uninspected_files=uninspected_files)
     report = result.get("consolidated_report")
     verified_findings = result.get("verified_findings", [])
 
     if not report:
-        print("Review completed with no report generated.")
-        return
+        sys.stderr.write("Review completed with no report generated.\n")
+        sys.exit(3)
 
     # Construct GitHub Review Payload
     comments: List[Dict[str, Any]] = []
@@ -102,22 +118,41 @@ def run_github_auto_review():
     submit_resp = requests.post(
         review_url,
         json=review_payload,
-        headers={"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"},
+        headers=api_headers,
         timeout=30,
     )
 
+    published = False
     if submit_resp.status_code in [200, 201]:
         print(f"Successfully posted SentinelPR review to PR #{pr_number} (Status: {event_type})")
+        published = True
     else:
         sys.stderr.write(f"Failed to post review: {submit_resp.status_code} {submit_resp.text}\n")
         # Fallback: post general issue comment if inline comments fail on hunk mismatch
         fallback_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-        requests.post(
+        fb_resp = requests.post(
             fallback_url,
             json={"body": report.summary_markdown},
-            headers={"Authorization": f"token {token}"},
+            headers=api_headers,
             timeout=30,
         )
+        if fb_resp.status_code in [200, 201]:
+            print(f"Posted fallback review comment to PR #{pr_number}")
+            published = True
+        else:
+            sys.stderr.write(f"Failed to post fallback comment: {fb_resp.status_code} {fb_resp.text}\n")
+
+    if not published:
+        sys.stderr.write("Fatal: Failed to publish review via both review API and issue comment fallback.\n")
+        sys.exit(3)
+
+    # Process exit outcome mapped to CI
+    if report.review_outcome == ReviewOutcome.CHANGES_REQUIRED:
+        sys.exit(1)
+    elif report.review_outcome == ReviewOutcome.INCOMPLETE_REVIEW:
+        sys.exit(2)
+    else:
+        sys.exit(0)
 
 
 if __name__ == "__main__":

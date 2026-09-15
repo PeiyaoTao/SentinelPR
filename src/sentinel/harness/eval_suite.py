@@ -178,15 +178,16 @@ SYNTHETIC_PRS: List[Dict[str, Any]] = [
                     return {"token": "session_token"}
             """).strip()
         },
-        "expected_categories": [FindingCategory.RISK],
-        "expected_findings_count": 1,
+        "expected_categories": [],
+        "expected_findings_count": 0,
+        "expected_risk_indicators": ["Untested Perimeter Modification"],
     },
 ]
 
 
 def run_eval_suite() -> Dict[str, Any]:
     """
-    Executes all synthetic benchmark PRs and outputs precision and recall metrics.
+    Executes all synthetic benchmark PRs and outputs precision, recall, and risk metrics.
     """
     results = []
     passed_tests = 0
@@ -210,21 +211,31 @@ def run_eval_suite() -> Dict[str, Any]:
 
         # Check if categories match expected
         actual_categories = [f.category for f in verified_findings]
-        expected_categories = case["expected_categories"]
+        expected_categories = case.get("expected_categories", [])
 
-        passed = (actual_count == expected_count) and all(
+        # Check risk indicators
+        risk_indicators = state.get("risk_indicators", [])
+        actual_risk_names = [ri.name for ri in risk_indicators]
+        expected_risk_names = case.get("expected_risk_indicators", [])
+
+        findings_match = (actual_count == expected_count) and all(
             cat in actual_categories for cat in expected_categories
         )
+        risks_match = all(rname in actual_risk_names for rname in expected_risk_names)
+
+        passed = findings_match and risks_match
 
         if passed:
             passed_tests += 1
             status_str = "[PASS]"
         else:
-            status_str = f"[FAIL] (Expected {expected_count} findings, got {actual_count})"
+            status_str = f"[FAIL] (Findings: expected {expected_count} got {actual_count}, Risks: expected {expected_risk_names} got {actual_risk_names})"
 
         print(f"  Result: {status_str}")
         for f in verified_findings:
             print(f"    - [{f.category.value} / {f.severity.value}] {f.title} ({f.file_path}:L{f.start_line})")
+        for ri in risk_indicators:
+            print(f"    - [RISK_INDICATOR / {ri.severity.value}] {ri.name} ({ri.metric_value})")
 
         results.append({
             "case_id": case_id,
@@ -232,6 +243,7 @@ def run_eval_suite() -> Dict[str, Any]:
             "actual_count": actual_count,
             "expected_count": expected_count,
             "findings": verified_findings,
+            "risk_indicators": risk_indicators,
         })
 
     total_tests = len(SYNTHETIC_PRS)
@@ -250,4 +262,8 @@ def run_eval_suite() -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    run_eval_suite()
+    import sys
+    res = run_eval_suite()
+    if res["passed"] < res["total"]:
+        sys.exit(1)
+    sys.exit(0)

@@ -6,14 +6,15 @@ import argparse
 import os
 import subprocess
 import sys
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from sentinel.config import default_config
 from sentinel.graph import review_pr
+from sentinel.state import ReviewOutcome
 
 
-def get_git_diff_and_files(diff_command: list) -> Tuple[str, Dict[str, str]]:
-    """Runs a git diff command and loads the post-change head files."""
+def get_git_diff_and_files(diff_command: list, base_ref: Optional[str] = None) -> Tuple[str, Dict[str, str], Dict[str, str]]:
+    """Runs a git diff command and loads immutable post-change and pre-change files."""
     try:
         diff_proc = subprocess.run(
             diff_command,
@@ -37,18 +38,51 @@ def get_git_diff_and_files(diff_command: list) -> Tuple[str, Dict[str, str]]:
         changed_paths = [p.strip() for p in name_proc.stdout.splitlines() if p.strip()]
 
         head_files: Dict[str, str] = {}
-        for path in changed_paths:
-            if os.path.exists(path) and os.path.isfile(path):
-                try:
-                    with open(path, "r", encoding="utf-8", errors="replace") as f:
-                        head_files[path] = f.read()
-                except Exception:
-                    pass
+        base_files: Dict[str, str] = {}
 
-        return diff_text, head_files
+        if base_ref:
+            # Immutable commit snapshot resolution
+            for path in changed_paths:
+                h_proc = subprocess.run(
+                    ["git", "show", f"HEAD:{path}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if h_proc.returncode == 0:
+                    head_files[path] = h_proc.stdout
+
+                b_proc = subprocess.run(
+                    ["git", "show", f"{base_ref}:{path}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if b_proc.returncode == 0:
+                    base_files[path] = b_proc.stdout
+        else:
+            # Working tree snapshot
+            for path in changed_paths:
+                if os.path.exists(path) and os.path.isfile(path):
+                    try:
+                        with open(path, "r", encoding="utf-8", errors="replace") as f:
+                            head_files[path] = f.read()
+                    except Exception:
+                        pass
+                # Attempt to read pre-change base file from HEAD
+                b_proc = subprocess.run(
+                    ["git", "show", f"HEAD:{path}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if b_proc.returncode == 0:
+                    base_files[path] = b_proc.stdout
+
+        return diff_text, head_files, base_files
     except subprocess.CalledProcessError as e:
         sys.stderr.write(f"Git error: {e.stderr}\n")
-        sys.exit(1)
+        sys.exit(3)
 
 
 def main():
@@ -105,15 +139,16 @@ def main():
 
     diff_text = ""
     head_files: Dict[str, str] = {}
+    base_files: Dict[str, str] = {}
 
     if args.git:
-        diff_text, head_files = get_git_diff_and_files(["git", "diff", "HEAD"])
+        diff_text, head_files, base_files = get_git_diff_and_files(["git", "diff", "HEAD"])
     elif args.branch:
-        diff_text, head_files = get_git_diff_and_files(["git", "diff", f"{args.branch}...HEAD"])
+        diff_text, head_files, base_files = get_git_diff_and_files(["git", "diff", f"{args.branch}...HEAD"], base_ref=args.branch)
     elif args.diff_file:
         if not os.path.exists(args.diff_file):
             sys.stderr.write(f"Error: Diff file '{args.diff_file}' not found.\n")
-            sys.exit(1)
+            sys.exit(3)
         with open(args.diff_file, "r", encoding="utf-8", errors="replace") as f:
             diff_text = f.read()
 
@@ -143,7 +178,7 @@ def main():
                 head_files[hunk.file_path] = "\n".join(reconstructed_lines + dedented_body)
     else:
         # Default behavior: if inside a git repo, check git status / diff
-        diff_text, head_files = get_git_diff_and_files(["git", "diff", "HEAD"])
+        diff_text, head_files, base_files = get_git_diff_and_files(["git", "diff", "HEAD"])
         if not diff_text.strip():
             print("No uncommitted git changes found. Use --git, --branch <branch>, or --diff-file <path>.")
             print("Run 'python -m sentinel.harness.eval_suite' to execute the synthetic PR benchmark.")
@@ -155,7 +190,7 @@ def main():
 
     print(f"Starting SentinelPR review (Provider: {default_config.provider}, Model: {default_config.fast_model})...")
 
-    result = review_pr(diff=diff_text, head_files=head_files)
+    result = review_pr(diff=diff_text, head_files=head_files, base_files=base_files)
     report = result.get("consolidated_report")
     verified_findings = result.get("verified_findings", [])
 
@@ -168,6 +203,16 @@ def main():
             with open(args.sarif, "w", encoding="utf-8") as f:
                 json.dump(report.sarif_json, f, indent=2)
             print(f"SARIF report exported to {args.sarif}\n")
+
+        if report.review_outcome == ReviewOutcome.CHANGES_REQUIRED:
+            sys.exit(1)
+        elif report.review_outcome == ReviewOutcome.INCOMPLETE_REVIEW:
+            sys.exit(2)
+        else:
+            sys.exit(0)
+    else:
+        sys.stderr.write("Review completed with no report generated.\n")
+        sys.exit(3)
 
 
 if __name__ == "__main__":
