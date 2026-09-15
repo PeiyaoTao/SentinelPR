@@ -1,0 +1,61 @@
+name: SentinelPR Repository Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install SentinelPR
+        run: |
+          pip install -e .
+
+      - name: Run SentinelPR Repository Review
+        env:
+          SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
+          SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || secrets.SENTINEL_BASE_URL || '' }}
+          FAST_MODEL: ${{ vars.FAST_MODEL || secrets.FAST_MODEL || '' }}
+          FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || secrets.FRONTIER_MODEL || '' }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -m sentinel.cli --repo . --markdown repo-review.md --sarif repo-review.sarif
+
+      - name: Publish Review to GitHub Job Summary
+        if: always()
+        run: |
+          if [ -f repo-review.md ]; then
+            cat repo-review.md >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: repo-review.sarif
+
+      - name: Archive Review Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sentinelpr-repo-review
+          path: |
+            repo-review.md
+            repo-review.sarif

@@ -322,6 +322,89 @@ To configure models:
 
 ---
 
+## Manual Whole-Repository Audit (GitHub Actions)
+
+In addition to automated PR quality gates, SentinelPR supports on-demand whole-repository reviews via GitHub Actions. This allows maintainers to manually audit an entire codebase, publish an executive report directly to the **GitHub Step Summary**, upload security alerts to the repository's **Security -> Code scanning** dashboard, and download SARIF/Markdown artifacts.
+
+### Workflow Configuration
+
+The manual repository audit workflow is configured in `.github/workflows/sentinel_repo_audit.yml`:
+
+```yaml
+name: SentinelPR Repository Audit
+
+on:
+  workflow_dispatch: # Strictly manual trigger from GitHub web UI
+
+permissions:
+  contents: read
+  security-events: write # Enables SARIF upload to GitHub Code Scanning
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install SentinelPR
+        run: |
+          pip install -e .
+
+      - name: Run SentinelPR Repository Review
+        env:
+          SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
+          SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || secrets.SENTINEL_BASE_URL || '' }}
+          FAST_MODEL: ${{ vars.FAST_MODEL || secrets.FAST_MODEL || '' }}
+          FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || secrets.FRONTIER_MODEL || '' }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -m sentinel.cli --repo . --markdown repo-review.md --sarif repo-review.sarif
+
+      - name: Publish Review to GitHub Job Summary
+        if: always()
+        run: |
+          if [ -f repo-review.md ]; then
+            cat repo-review.md >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: repo-review.sarif
+
+      - name: Archive Review Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sentinelpr-repo-review
+          path: |
+            repo-review.md
+            repo-review.sarif
+```
+
+### How to Trigger Manually on GitHub
+
+1. Navigate to your repository on GitHub.
+2. Click the **Actions** tab.
+3. In the left navigation, select **SentinelPR Repository Audit**.
+4. Click the **Run workflow** dropdown on the right.
+5. Choose your target branch and click **Run workflow**.
+6. When the run finishes, view the **Summary** tab to read the full report rendered in GitHub Step Summary, or inspect code findings under the repository's **Security** tab.
+
+---
+
 ## Testing & Benchmarks
 
 SentinelPR includes comprehensive unit tests and a Day-1 synthetic evaluation benchmark suite:
@@ -361,18 +444,21 @@ SentinelPR/
 |       +-- graph.py                       # LangGraph compilation (Fan-out, test loop, critic gate)
 |       +-- llm.py                         # Universal client for local (Ollama) & cloud LLMs
 |       +-- cli.py                         # Command-line review interface
+|       +-- repository.py                  # Working-directory collection & boundary defense
+|       +-- repository_report.py           # Whole-repo Markdown & SARIF consolidator
 |       +-- agents/
 |       |   +-- triage.py                  # Full-file AST mapper & trust zone classifier
 |       |   +-- logic.py                   # Concurrency, state mutations & logic bugs
 |       |   +-- security.py                # Injection, secrets & boundary threat analysis
 |       |   +-- anti_bloat.py              # Fail-fast auditor for defensive bloat
+|       |   +-- project.py                 # Grounded project-level engineering & delivery advice
 |       |   +-- test_synthesizer.py        # Minimal test generator with reflection loop
 |       |   +-- critic.py                  # Adversarial critic gate (tiered proof standards)
 |       |   +-- consolidator.py            # GitHub inline comment & SARIF 2.1.0 formatter
 |       +-- harness/
 |           +-- sandbox.py                 # Ephemeral isolated test execution harness
 |           +-- eval_suite.py              # Synthetic PR benchmark runner
-+-- tests/                                 # Pytest test suite (35 test cases across 6 suites)
++-- tests/                                 # Pytest test suite (57 test cases across 8 suites)
 ```
 
 ---
