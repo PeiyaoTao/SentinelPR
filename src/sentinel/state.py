@@ -3,7 +3,7 @@ State definitions and Pydantic schemas for SentinelPR.
 """
 
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 import operator
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -146,6 +146,34 @@ class Finding(BaseModel):
     critic_reasoning: Optional[str] = None
 
 
+class RepositoryInventory(BaseModel):
+    """Coverage of a local working-directory snapshot; target code is never executed."""
+    root: str
+    files: List[str] = Field(default_factory=list)
+    analyzed_files: List[str] = Field(default_factory=list)
+    context_files: List[str] = Field(default_factory=list)
+    excluded_files: Dict[str, str] = Field(default_factory=dict)
+    uninspected_files: Dict[str, str] = Field(default_factory=dict)
+
+
+class ProjectAdvice(BaseModel):
+    """Advisory engineering/delivery feedback, separate from code findings."""
+    title: str = Field(min_length=1, max_length=200)
+    priority: Literal["high", "medium", "low"]
+    rationale: str = Field(min_length=1, max_length=2000)
+    recommendation: str = Field(min_length=1, max_length=2000)
+    evidence: List[str] = Field(default_factory=list, max_length=20)
+    source: Literal["heuristic", "llm"] = "heuristic"
+
+
+class ProjectAssessment(BaseModel):
+    strengths: List[str] = Field(default_factory=list)
+    advice: List[ProjectAdvice] = Field(default_factory=list)
+    llm_summary: Optional[str] = None
+    limitations: List[str] = Field(default_factory=list)
+    llm_context_files: List[str] = Field(default_factory=list)
+
+
 class ConsolidatedReport(BaseModel):
     """Final output payload ready for GitHub and SARIF consumption."""
     summary_markdown: str
@@ -159,6 +187,8 @@ class ConsolidatedReport(BaseModel):
     risk_assessment: Optional[RiskAssessment] = None
     risk_indicators: List[RiskIndicator] = Field(default_factory=list)
     uninspected_files: List[str] = Field(default_factory=list)
+    repository_inventory: Optional[RepositoryInventory] = None
+    project_assessment: Optional[ProjectAssessment] = None
 
 
 class PRReviewState(TypedDict, total=False):
@@ -180,3 +210,6 @@ class PRReviewState(TypedDict, total=False):
     uninspected_files: Annotated[List[str], operator.add]
     review_outcome: Optional[ReviewOutcome]
     consolidated_report: Optional[ConsolidatedReport]
+
+    repository_inventory: RepositoryInventory
+    project_assessment: ProjectAssessment

@@ -49,6 +49,12 @@ class SentinelConfig(BaseModel):
         description="Limit on AST symbol scopes analyzed per changed file.",
     )
 
+    # Repository review budgets (skipped files are disclosed in the report).
+    repository_max_files: int = Field(default=500, gt=0)
+    repository_max_file_bytes: int = Field(default=256_000, gt=0)
+    repository_max_total_bytes: int = Field(default=4_000_000, gt=0)
+    repository_llm_context_chars: int = Field(default=48_000, ge=1000)
+
     # Sandboxing & Test Verification
     sandbox_timeout_seconds: int = Field(
         default=5,

@@ -9,7 +9,7 @@ import sys
 from typing import Dict, Optional, Tuple
 
 from sentinel.config import default_config
-from sentinel.graph import review_pr
+from sentinel.graph import review_pr, review_repository
 from sentinel.state import ReviewOutcome
 
 
@@ -85,21 +85,39 @@ def get_git_diff_and_files(diff_command: list, base_ref: Optional[str] = None) -
         sys.exit(3)
 
 
+def _outcome_exit_code(outcome: ReviewOutcome) -> int:
+    return {
+        ReviewOutcome.CLEAN: 0, ReviewOutcome.CHANGES_REQUIRED: 1,
+        ReviewOutcome.INCOMPLETE_REVIEW: 2, ReviewOutcome.INFRASTRUCTURE_FAILURE: 3,
+    }[outcome]
+
+
+def _export_report(report, markdown_path, sarif_path) -> None:
+    import json
+    from pathlib import Path
+    if markdown_path:
+        Path(markdown_path).write_text(report.summary_markdown, encoding="utf-8")
+    if sarif_path:
+        Path(sarif_path).write_text(json.dumps(report.sarif_json, indent=2), encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="SentinelPR: Autonomous Code Reviewer & PR Quality Gate"
     )
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--repo", nargs="?", const=".", metavar="PATH", help="Review an entire local repository or project directory (default: current directory)")
+    modes.add_argument(
         "--git",
         action="store_true",
         help="Review uncommitted changes in current repository (git diff HEAD)",
     )
-    parser.add_argument(
+    modes.add_argument(
         "--branch",
         type=str,
         help="Target base branch to diff against (e.g. main, master)",
     )
-    parser.add_argument(
+    modes.add_argument(
         "--diff-file",
         type=str,
         help="Path to a unified .diff or .patch file to review",
@@ -126,6 +144,8 @@ def main():
         help="File path to export SARIF 2.1.0 report",
     )
 
+    parser.add_argument("--markdown", metavar="PATH", help="Write the complete review as Markdown")
+
     args = parser.parse_args()
 
     # Override config if CLI arguments passed
@@ -136,6 +156,17 @@ def main():
         default_config.frontier_model = args.model
     if args.base_url:
         default_config.base_url = args.base_url
+
+    if args.repo is not None:
+        try:
+            result = review_repository(args.repo)
+            report = result["consolidated_report"]
+            print(report.summary_markdown)
+            _export_report(report, args.markdown, args.sarif)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            sys.stderr.write(f"Repository review failed: {error}\n")
+            sys.exit(3)
+        sys.exit(_outcome_exit_code(report.review_outcome))
 
     diff_text = ""
     head_files: Dict[str, str] = {}
@@ -198,18 +229,8 @@ def main():
         from sentinel.formatter import print_colored_report
         print_colored_report(report, verified_findings)
 
-        if args.sarif:
-            import json
-            with open(args.sarif, "w", encoding="utf-8") as f:
-                json.dump(report.sarif_json, f, indent=2)
-            print(f"SARIF report exported to {args.sarif}\n")
-
-        if report.review_outcome == ReviewOutcome.CHANGES_REQUIRED:
-            sys.exit(1)
-        elif report.review_outcome == ReviewOutcome.INCOMPLETE_REVIEW:
-            sys.exit(2)
-        else:
-            sys.exit(0)
+        _export_report(report, args.markdown, args.sarif)
+        sys.exit(_outcome_exit_code(report.review_outcome))
     else:
         sys.stderr.write("Review completed with no report generated.\n")
         sys.exit(3)

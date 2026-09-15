@@ -87,6 +87,70 @@ pip install -e ".[dev]"
 
 ## Usage
 
+### Whole-repository and project review
+
+Review all eligible files in a local repository or project directory, including code
+that has not changed in a PR:
+
+```bash
+# Current directory; deterministic offline review
+python -m sentinel.cli --repo --provider heuristics
+
+# Another local project; save the full review and code findings
+python -m sentinel.cli --repo /path/to/project --provider heuristics --markdown review.md --sarif review.sarif
+
+# Add one bounded model assessment of architecture and delivery readiness
+python -m sentinel.cli --repo . --provider ollama --model qwen2.5-coder:7b --markdown review.md
+```
+
+The repository report includes scope and coverage, observed strengths, code findings
+with locations and proof statuses, prioritized project critiques, recommended next
+steps, and inspection limitations. Advice about tests, documentation, CI, and module
+responsibilities is advisory; it does not become a blocking defect or a SARIF result.
+There are no PR inline comments or automatic GitHub publications in this mode.
+
+Python API:
+
+```python
+from sentinel.graph import review_repository
+
+result = review_repository("/path/to/project")
+report = result["consolidated_report"]
+print(report.summary_markdown)
+print(report.repository_inventory.analyzed_files)
+for advice in report.project_assessment.advice:
+    print(advice.priority, advice.title, advice.recommendation)
+```
+
+**Scope:** This mode reviews the local working directory, including non-ignored
+untracked files. Git projects use Git's ignore rules; plain directories use built-in
+exclusions for dependencies, build outputs, virtual environments, and VCS metadata.
+Environment secret files and private-key files are excluded. Symlinks/junctions are
+not followed. Stop concurrent edits if you need a consistent working-directory review.
+
+Code rules currently support Python. README, packaging, and CI files provide project
+context; unsupported source languages, parse errors, read failures, and budget omissions
+are disclosed. Empty or documentation-only projects produce an incomplete code review.
+Repository review never imports target modules, runs the project's tests/builds, or
+executes synthesized scripts. Existing deterministic criticism filters code findings;
+an optional model receives bounded source excerpts for additional, explicitly advisory
+project feedback. Model failures and sampled context are disclosed in the report.
+
+Default limits are 500 source/context files, 256 KB per file, 4 MB total source/context,
+and 48,000 characters of serialized model context. Configure these through
+`sentinel.config.default_config.repository_max_files`, `repository_max_file_bytes`,
+`repository_max_total_bytes`, and `repository_llm_context_chars` before using the Python
+API. Model advice must cite paths present in its supplied excerpts, but remains a model
+assessment rather than verified evidence.
+
+Exit codes: `0` = no blocking findings from supported checks; `1` = blocking findings;
+`2` = incomplete source analysis; `3` = infrastructure failure. Blocking findings take
+precedence over incomplete analysis, while the report still lists every inspection gap.
+Advisory recommendations do not change the exit code. `CLEAN` is not production approval.
+
+`--repo`, `--git`, `--branch`, and `--diff-file` are mutually exclusive. `--markdown`
+and `--sarif` exports are available for both repository and PR review.
+
 ### Option A: Command-Line Interface (CLI)
 
 Review uncommitted changes, feature branches, or exported patch files directly from your terminal:

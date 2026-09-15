@@ -95,3 +95,41 @@ def review_pr(
     graph = create_sentinel_graph()
     final_state = graph.invoke(initial_state)
     return final_state
+
+
+def review_repository(path=".") -> Dict[str, Any]:
+    """Review a local project, including unchanged Python files and project-wide advice.
+
+    Reads a bounded working-directory snapshot, respecting Git ignores when available.
+    Performs static review only: no project imports, builds, tests, or generated execution.
+    The configured provider optionally supplies one bounded, advisory model assessment.
+    """
+    from sentinel.agents.project import project_agent_node, repository_critic_node
+    from sentinel.config import default_config
+    from sentinel.repository import collect_repository, repository_triage_node
+    from sentinel.repository_report import repository_consolidator_node
+
+    inventory, contents = collect_repository(path, default_config)
+    initial_state: PRReviewState = {
+        "diff": "", "base_files": {}, "head_files": contents, "hunks": [],
+        "changed_files": [], "symbols": [], "candidate_findings": [],
+        "verified_findings": [], "repro_tests": {}, "risk_indicators": [],
+        "risk_assessment": None, "uninspected_files": list(inventory.uninspected_files),
+        "repository_inventory": inventory,
+    }
+    builder = StateGraph(PRReviewState)
+    builder.add_node("triage", repository_triage_node)
+    builder.add_node("logic", logic_agent_node)
+    builder.add_node("security", security_agent_node)
+    builder.add_node("anti_bloat", anti_bloat_agent_node)
+    builder.add_node("critic", repository_critic_node)
+    builder.add_node("project", project_agent_node)
+    builder.add_node("report", repository_consolidator_node)
+    builder.add_edge(START, "triage")
+    for name in ("logic", "security", "anti_bloat"):
+        builder.add_edge("triage", name)
+    builder.add_edge(["logic", "security", "anti_bloat"], "critic")
+    builder.add_edge("critic", "project")
+    builder.add_edge("project", "report")
+    builder.add_edge("report", END)
+    return builder.compile().invoke(initial_state)
