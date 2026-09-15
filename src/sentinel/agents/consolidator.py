@@ -182,12 +182,15 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
     from sentinel.config import default_config
 
     engine_name = default_config.provider.capitalize()
-    model_name = default_config.fast_model
+    if default_config.fast_model == default_config.frontier_model:
+        model_display = f"`{default_config.fast_model}`"
+    else:
+        model_display = f"Fast: `{default_config.fast_model}` | Frontier: `{default_config.frontier_model}`"
     status_label = "Clean (Approved)" if not verified_findings else f"{accepted_count} Action(s) Required"
 
     summary_lines = [
         "## SentinelPR Quality Gate Report",
-        f"**Engine**: {engine_name} (`{model_name}`) | **Evaluated**: {total_candidates} candidate findings | **Status**: {status_label}\n",
+        f"**Engine**: {engine_name} ({model_display}) | **Evaluated**: {total_candidates} candidate findings | **Status**: {status_label}\n",
     ]
 
     # Executive qualitative review from LLM when enabled
@@ -196,13 +199,25 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
             from sentinel.llm import get_llm_client
             client = get_llm_client(tier="fast")
             diff_text = state.get("diff", "")
+            changed_files = state.get("changed_files", [])
+            files_summary = ", ".join(changed_files[:15])
+            if len(changed_files) > 15:
+                files_summary += f" and {len(changed_files) - 15} more"
+
             risk_val = risk_assessment.risk_level.value if risk_assessment else "LOW"
+            churn_val = risk_assessment.total_churn_lines if risk_assessment else 0
+
+            finding_highlights = [f"- [{f.severity.value}] {f.title} ({f.file_path})" for f in verified_findings[:5]]
+            findings_text = "\n".join(finding_highlights) if finding_highlights else "No code defects found."
+
             prompt = (
-                f"You are SentinelPR, a senior staff code reviewer. Write a concise 2-sentence executive review summary for this PR.\n"
+                f"You are SentinelPR, an autonomous staff code reviewer. Write a concise 2-sentence executive review summary for this pull request.\n"
+                f"Files modified ({len(changed_files)}): {files_summary}\n"
+                f"Total churn: {churn_val} lines\n"
                 f"Defects Found: {accepted_count}\n"
-                f"Risk Level: {risk_val}\n"
-                f"Diff excerpt:\n{diff_text[:1200]}\n"
-                "Be direct, constructive, and concise."
+                f"Finding Highlights:\n{findings_text}\n"
+                f"PR Risk Level: {risk_val} (based on churn and blast radius)\n"
+                "Provide an accurate, balanced assessment reflecting the full scope of changes across all files. Do not assume the PR is limited to documentation or a single file. Be direct and constructive."
             )
             llm_summary = client.complete([{"role": "user", "content": prompt}]).strip()
             if llm_summary:
