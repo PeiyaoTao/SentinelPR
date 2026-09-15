@@ -67,8 +67,8 @@ def get_git_diff_and_files(diff_command: list, base_ref: Optional[str] = None) -
                     try:
                         with open(path, "r", encoding="utf-8", errors="replace") as f:
                             head_files[path] = f.read()
-                    except Exception:
-                        pass
+                    except (OSError, UnicodeDecodeError) as e:
+                        sys.stderr.write(f"Warning: Failed to read head file '{path}': {e}\n")
                 # Attempt to read pre-change base file from HEAD
                 b_proc = subprocess.run(
                     ["git", "show", f"HEAD:{path}"],
@@ -158,8 +158,8 @@ def main():
                 try:
                     with open(hunk.file_path, "r", encoding="utf-8", errors="replace") as f:
                         head_files[hunk.file_path] = f.read()
-                except Exception:
-                    pass
+                except (OSError, UnicodeDecodeError) as e:
+                    sys.stderr.write(f"Warning: Failed to read diff target file '{hunk.file_path}': {e}\n")
             elif hunk.file_path not in head_files:
                 import textwrap
                 reconstructed_lines = []

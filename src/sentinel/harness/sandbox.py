@@ -130,6 +130,6 @@ def execute_test_script(
 
         except subprocess.TimeoutExpired:
             return ProofStatus.TIMEOUT, f"Execution timed out after {timeout} seconds."
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             return ProofStatus.EXECUTION_FAILED, f"Sandbox error executing test in container: {str(e)}"
 

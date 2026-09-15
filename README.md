@@ -3,21 +3,28 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
-[![AST Engine](https://img.shields.io/badge/AST-Python%20ast%20%7C%20Tree--sitter-green.svg)](https://docs.python.org/3/library/ast.html)
+[![AST Engine](https://img.shields.io/badge/AST-Python%20ast-green.svg)](https://docs.python.org/3/library/ast.html)
 
-SentinelPR is a production-grade multi-agent code reviewer built with LangGraph, deterministic Python AST slicing (with Tree-sitter multi-language expansion), sandboxed Docker container verification, an active Anti-Bloat / Fail-Fast Auditor calibrated by trust boundaries, an adversarial critic gate, and a diff-hunk offset validator.
+SentinelPR is an autonomous multi-agent code reviewer built with LangGraph, deterministic Python AST slicing, optional Docker container test verification with host-execution refusal, an active Anti-Bloat / Fail-Fast Auditor calibrated by trust boundaries, an adversarial critic gate, and a diff-hunk offset validator.
 
 ---
 
 ## Key Capabilities
 
-1. **Full-File AST Slicing**: Slices post-change files into symbol-level AST scopes using Python's standard library `ast` parser (with Tree-sitter architecture for polyglot extension), isolating enclosing function/class boundaries, decorators, and imports for high-precision token efficiency.
+1. **Python AST Slicing**: Slices post-change Python files into symbol-level AST scopes using Python's standard library `ast` module, isolating enclosing function/class boundaries, decorators, and imports for high-precision token efficiency.
 2. **Deterministic Rules + LLM Reasoning Hybrid**: Combines deterministic rules (fast AST boundary checks, cyclomatic complexity calculations, safe diff hunk mapping, and container isolation) with LLM semantic reasoning (concurrency bugs, taint tracking, and adversarial critique) for zero-hallucination reviews.
 3. **Trust-Zone Aware Anti-Bloat**: Enforces the **Fail-Fast Principle** by flagging ghost null-checks, redundant validations, and swallowed exceptions in internal domain code without breaking mandatory defensive validations at public perimeter boundaries.
 4. **Adversarial Critic Gate**: Acts as defense counsel for the author to eliminate false alarms and nitpicks, applying a severity-tiered standard of proof before publishing findings.
-5. **Isolated Container Test Synthesis**: Formulates minimal standalone pytest scripts for candidate logic findings and executes them in a network-disabled, read-only Docker container to provide dynamic proof of bugs.
+5. **Gated Container Test Verification**: Formulates minimal standalone pytest scripts for candidate logic findings and executes them in an isolated, network-disabled Docker container when available. If Docker is unavailable in the environment, SentinelPR safely marks dynamic proof as unavailable and relies strictly on static AST and critic analysis, completely refusing host execution of untrusted PR code.
 6. **Diff-Hunk Offset Validator & Safe Replacements**: Accurately maps candidate finding line numbers against git patch hunks to eliminate GitHub API 422 errors, and guarantees that interactive GitHub ````suggestion```` blocks only output syntax-verified code replacements.
 7. **Token-Optimized Architecture**: Prunes surrounding source context down to changed symbol scopes, pre-filters noisy files (lockfiles, minified code, assets), and routes tasks across model tiers to keep typical PR review costs at a few cents.
+
+---
+
+## Language Scope & Roadmap
+
+- **Python (Active AST Engine)**: Symbol-level AST slicing, trust zone classification, decorator preservation, and fail-fast anti-bloat analysis are powered natively by Python's standard `ast` module.
+- **Polyglot Expansion (Roadmap)**: Non-Python source files are currently analyzed via unified diff hunks and risk heuristics. Multi-language AST slicing via Tree-sitter is planned on the future roadmap.
 
 ---
 

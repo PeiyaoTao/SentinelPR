@@ -134,7 +134,8 @@ Instructions:
                 return CriticDecision.ACCEPT, f"Accepted by LLM Critic: {reason}"
             elif decision_str == "REJECT":
                 return CriticDecision.REJECT, f"Rejected by LLM Critic: {reason}"
-    except Exception:
+    except (json.JSONDecodeError, KeyError, ValueError, RuntimeError) as e:
+        sys.stderr.write(f"Warning: Critic LLM evaluation failed: {e}\n")
         return None
 
     return None

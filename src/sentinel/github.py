@@ -73,7 +73,8 @@ def run_github_auto_review():
             try:
                 with open(filename, "r", encoding="utf-8", errors="replace") as fh:
                     head_files[filename] = fh.read()
-            except Exception:
+            except (OSError, UnicodeDecodeError) as e:
+                sys.stderr.write(f"Warning: Could not read head file '{filename}': {e}\n")
                 uninspected_files.append(filename)
         else:
             if f.get("status") != "removed":
