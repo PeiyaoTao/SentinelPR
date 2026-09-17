@@ -39,6 +39,11 @@ class SentinelConfig(BaseModel):
         description="Timeout in seconds for LLM generation requests (useful for large local models).",
     )
 
+    # Optional contextual criticism; model decisions never establish proof.
+    llm_critic_enabled: bool = True
+    llm_critic_max_findings: int = Field(default=8, ge=0)
+    llm_critic_context_chars: int = Field(default=12000, ge=1000)
+
     # Token & PR Budgets
     max_pr_churn_lines: int = Field(
         default=1500,
@@ -54,6 +59,15 @@ class SentinelConfig(BaseModel):
     repository_max_file_bytes: int = Field(default=256_000, gt=0)
     repository_max_total_bytes: int = Field(default=4_000_000, gt=0)
     repository_llm_context_chars: int = Field(default=48_000, ge=1000)
+
+    # Advisory specialist policies. No target code/configuration is executed.
+    quality_include_tests: bool = False
+    quality_max_function_lines: int = Field(default=80, ge=1)
+    quality_max_nesting: int = Field(default=4, ge=1)
+    quality_max_complexity: int = Field(default=10, ge=1)
+    quality_duplicate_min_statements: int = Field(default=6, ge=2)
+    quality_max_findings: int = Field(default=200, ge=1)
+    quality_forbidden_dependencies: dict[str, list[str]] = Field(default_factory=dict)
 
     # Sandboxing & Test Verification
     sandbox_timeout_seconds: int = Field(
@@ -116,29 +130,35 @@ def load_config_from_env() -> SentinelConfig:
 
     # Set provider-specific defaults
     if cfg.provider == "deepseek":
-        cfg.api_key = deepseek_key or os.getenv("SENTINEL_API_KEY", "")
+        cfg.api_key = deepseek_key or (os.getenv("SENTINEL_API_KEY") or "")
         cfg.base_url = "https://api.deepseek.com/v1"
         cfg.fast_model = "deepseek-chat"
         cfg.frontier_model = "deepseek-chat"
     elif cfg.provider == "openai":
-        cfg.api_key = openai_key or os.getenv("SENTINEL_API_KEY", "")
+        cfg.api_key = openai_key or (os.getenv("SENTINEL_API_KEY") or "")
         cfg.base_url = "https://api.openai.com/v1"
         cfg.fast_model = "gpt-4o-mini"
         cfg.frontier_model = "gpt-4o"
     elif cfg.provider == "gemini":
-        cfg.api_key = gemini_key or os.getenv("SENTINEL_API_KEY", "")
+        cfg.api_key = gemini_key or (os.getenv("SENTINEL_API_KEY") or "")
         cfg.fast_model = "gemini-2.0-flash"
         cfg.frontier_model = "gemini-2.0-flash"
 
+    critic_setting = os.getenv("SENTINEL_LLM_CRITIC")
+    if critic_setting is not None:
+        if critic_setting.lower() not in {"true", "false"}:
+            raise ValueError("SENTINEL_LLM_CRITIC must be true or false")
+        cfg.llm_critic_enabled = critic_setting.lower() == "true"
+
     # Explicit environment overrides always take precedence
     if os.getenv("SENTINEL_API_KEY"):
-        cfg.api_key = os.getenv("SENTINEL_API_KEY")
+        cfg.api_key = os.environ["SENTINEL_API_KEY"]
     if os.getenv("SENTINEL_BASE_URL"):
-        cfg.base_url = os.getenv("SENTINEL_BASE_URL")
+        cfg.base_url = os.environ["SENTINEL_BASE_URL"]
     if os.getenv("FAST_MODEL"):
-        cfg.fast_model = os.getenv("FAST_MODEL")
+        cfg.fast_model = os.environ["FAST_MODEL"]
     if os.getenv("FRONTIER_MODEL"):
-        cfg.frontier_model = os.getenv("FRONTIER_MODEL")
+        cfg.frontier_model = os.environ["FRONTIER_MODEL"]
 
     return cfg
 

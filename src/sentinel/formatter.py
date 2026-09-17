@@ -8,7 +8,7 @@ import os
 import sys
 from typing import List
 
-from sentinel.state import ConsolidatedReport, Finding, Severity
+from sentinel.state import ConsolidatedReport, Finding, Severity, ReviewOutcome
 
 # Enable ANSI virtual terminal processing on Windows
 if sys.platform == "win32":
@@ -53,6 +53,10 @@ def print_colored_report(report: ConsolidatedReport, verified_findings: List[Fin
     print("\n" + "=" * 65)
     print(f"{COLOR_BOLD}SentinelPR Quality Gate Analysis{COLOR_RESET}")
     print("=" * 65)
+
+    if not verified_findings and report.review_outcome == ReviewOutcome.INCOMPLETE_REVIEW:
+        print(f"\n{COLOR_YELLOW}{COLOR_BOLD}[INCOMPLETE REVIEW] Some checks could not finish.{COLOR_RESET}\n")
+        return
 
     if not verified_findings:
         print(f"\n{COLOR_GREEN}{COLOR_BOLD}[CLEAN / PASS] No defects or bloat detected.{COLOR_RESET}")

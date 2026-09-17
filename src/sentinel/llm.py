@@ -20,7 +20,7 @@ def resolve_llm_credentials(
     Consolidates provider, endpoint, model, and credentials atomically.
     Prevents cross-provider credential contamination (e.g. Gemini selecting OpenAI key).
     """
-    resolved_provider = (provider or os.getenv("SENTINEL_LLM_PROVIDER", default_config.provider)).lower()
+    resolved_provider = (provider or os.getenv("SENTINEL_LLM_PROVIDER") or default_config.provider).lower()
 
     provider_endpoints = {
         "deepseek": "https://api.deepseek.com/v1",
@@ -33,7 +33,7 @@ def resolve_llm_credentials(
     if api_key:
         resolved_key = api_key
     elif os.getenv("SENTINEL_API_KEY"):
-        resolved_key = os.getenv("SENTINEL_API_KEY")
+        resolved_key = os.environ["SENTINEL_API_KEY"]
     elif resolved_provider == "deepseek":
         resolved_key = os.getenv("DEEPSEEK_API_KEY", default_config.api_key)
     elif resolved_provider == "openai":
@@ -47,7 +47,7 @@ def resolve_llm_credentials(
     if base_url:
         resolved_base_url = base_url
     elif os.getenv("SENTINEL_BASE_URL"):
-        resolved_base_url = os.getenv("SENTINEL_BASE_URL")
+        resolved_base_url = os.environ["SENTINEL_BASE_URL"]
     elif resolved_provider in provider_endpoints and ("localhost" in default_config.base_url or resolved_provider != default_config.provider):
         resolved_base_url = provider_endpoints[resolved_provider]
     else:

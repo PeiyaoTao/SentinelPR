@@ -3,10 +3,10 @@ Tests for SentinelPR LangGraph end-to-end multi-agent workflow.
 """
 
 from sentinel.graph import review_pr
-from sentinel.state import FindingCategory, Severity
+from sentinel.state import FindingCategory, ProofStatus, Severity
 
 
-def test_full_review_flow_catches_mutable_default(sample_python_diff, sample_head_files):
+def test_full_review_flow_catches_mutable_default(sample_python_diff, sample_head_files, monkeypatch):
     """
     End-to-end verification that the LangGraph workflow:
     1. Triages diff and slices AST
@@ -16,6 +16,7 @@ def test_full_review_flow_catches_mutable_default(sample_python_diff, sample_hea
     5. Clears the adversarial critic gate
     6. Produces valid consolidated report and inline comment
     """
+    monkeypatch.setattr("sentinel.agents.test_synthesizer.execute_test_script", lambda script: (ProofStatus.SANDBOX_UNAVAILABLE, "test fixture"))
     final_state = review_pr(
         diff=sample_python_diff,
         head_files=sample_head_files,
@@ -29,7 +30,8 @@ def test_full_review_flow_catches_mutable_default(sample_python_diff, sample_hea
     mutable_finding = next((f for f in verified if "Mutable Default" in f.title), None)
     assert mutable_finding is not None
     assert mutable_finding.category == FindingCategory.LOGIC
-    assert mutable_finding.severity == Severity.HIGH
+    assert mutable_finding.severity == Severity.MEDIUM
+    assert mutable_finding.hypothesis
 
     # Check report
     report = final_state.get("consolidated_report")

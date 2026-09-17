@@ -125,14 +125,17 @@ for advice in report.project_assessment.advice:
 **Scope:** This mode reviews the local working directory, including non-ignored
 untracked files. Git projects use Git's ignore rules; plain directories use built-in
 exclusions for dependencies, build outputs, virtual environments, and VCS metadata.
-Environment secret files and private-key files are excluded. Symlinks/junctions are
+Environment secret files and private-key files are excluded from model/static-review
+context; the separate secret scanner can inspect tracked credentials without
+publishing their values. Symlinks/junctions are
 not followed. Stop concurrent edits if you need a consistent working-directory review.
 
 Code rules currently support Python. README, packaging, and CI files provide project
 context; unsupported source languages, parse errors, read failures, and budget omissions
 are disclosed. Empty or documentation-only projects produce an incomplete code review.
-Repository review never imports target modules, runs the project's tests/builds, or
-executes synthesized scripts. Existing deterministic criticism filters code findings;
+The default repository analysis never imports target modules, runs tests/builds, or
+executes synthesized scripts. Explicit `--checks` enables the separate validation
+runners described below. Shared evidence checks and optional contextual criticism filter code findings;
 an optional model receives bounded source excerpts for additional, explicitly advisory
 project feedback. Model failures and sampled context are disclosed in the report.
 
@@ -150,6 +153,183 @@ Advisory recommendations do not change the exit code. `CLEAN` is not production 
 
 `--repo`, `--git`, `--branch`, and `--diff-file` are mutually exclusive. `--markdown`
 and `--sarif` exports are available for both repository and PR review.
+
+### Specialist code-quality checks
+
+PR and repository review now share a Python repository index and six deterministic
+specialists. Findings include stable rule IDs, source locations/hashes, conditions,
+confidence, and `observed` or `hypothesis` verification status. These **advisory**
+findings are separate from existing blocking code findings and are exported as SARIF
+notes. Architecture policy violations are advisory too; they do not automatically
+change the merge policy.
+
+| Specialist | Implemented checks |
+| --- | --- |
+| Architecture | Witnessed module-import cycles; explicitly configured forbidden dependencies |
+| Redundancy | Substantial matching function ASTs; unreachable statements after unconditional control transfer |
+| Performance | Constant regex compilation and query-like calls inside loops, labeled as workload-dependent hypotheses |
+| Readability | Function length and control-flow nesting thresholds |
+| Maintainability | Function branch-complexity estimates; directly importing tests as context, not coverage |
+| Security | Direct local parameter-to-dynamic-execution paths, labeled as hypotheses requiring caller/trust validation |
+
+The shared index exposes `get_symbol`, `get_source`, `get_callers`, `get_callees`,
+`get_module_dependencies`, and `get_related_tests`. It resolves Python module names
+for repository-root and `src` layouts, unconditional module imports, and direct calls
+to local/imported top-level functions. Conditional imports, re-exports, methods,
+closures, dynamic dispatch, and nonstandard source roots can remain unresolved.
+Ambiguities, parse errors, unresolved call counts, and finding-budget limits are
+reported. No source is imported or executed to build this index.
+
+The optional repository model now prioritizes windows around findings and retrieves
+related callers, callees, dependencies, and test modules, within the existing context
+budget. This project assessment remains a single advisory call, separate from the
+optional per-finding critic described below; these are not six autonomous LLM agents.
+
+In PR mode, specialist findings must intersect changed locations, and matching
+findings in the supplied base snapshot are suppressed. Cross-file checks are limited
+to supplied files; include surrounding source through the Python API when available.
+These checks do not claim full-program analysis when only changed files were supplied.
+
+Policy settings are available through `sentinel.config.default_config`:
+
+```python
+from sentinel.config import default_config
+
+default_config.quality_max_function_lines = 80
+default_config.quality_max_nesting = 4
+default_config.quality_max_complexity = 10
+default_config.quality_duplicate_min_statements = 6
+default_config.quality_max_findings = 200
+default_config.quality_include_tests = False
+default_config.quality_forbidden_dependencies = {"app.domain": ["app.api"]}
+```
+
+Tests are indexed for relationships but excluded from specialist advice by default.
+A finding budget truncation is an incomplete review, not a clean pass. Configured
+thresholds measure source structure; they do not prove that a design is poor.
+
+#### Repository quality baselines
+
+```bash
+python -m sentinel.cli --repo . --provider heuristics --save-baseline quality-baseline.json
+python -m sentinel.cli --repo . --provider heuristics --baseline quality-baseline.json --markdown review.md
+```
+
+Or use `review_repository(path, baseline_path="quality-baseline.json")`. Comparisons
+report new, existing, resolved, and unassessed findings. Fingerprints survive unrelated
+line insertions, but changes to a finding's semantic subject (including duplicate/cycle
+group membership) can create a new fingerprint. Baselines are bound to the repository
+directory and specialist policy. Incomplete scans cannot overwrite baselines, and
+missing findings are not marked resolved when relevant source was skipped or excluded.
+Use `--save-baseline` explicitly to accept a new baseline after reviewing changes.
+
+This is the first specialist implementation. General dead-code detection, unused-import
+analysis, full taint/authorization analysis, runtime profiling, independent
+LLM specialists, and resumable module-batch reviews remain future work. Quality findings
+stay advisory until their individual rules have adequate precision evidence.
+
+### Evidence gate and optional contextual critic
+
+PR and repository findings now use the same critic. Detection and structural checks
+run first. The concurrency rule inspects direct augmented assignments to explicitly
+declared globals within the same function scope; strings, comments, and declarations
+in nested functions do not count. It does not detect every form of shared-state access.
+A real global mutation remains an **advisory hypothesis** until concurrency evidence
+supports the claimed race; a lock-shaped context alone is not assumed to prove safety.
+
+Severity describes impact, not confidence. HIGH/CRITICAL candidates with untested or
+inconclusive proof are downgraded to nonblocking hypotheses. This also applies to
+existing rules such as mutable-default suggestions when verification is unavailable.
+Their original proof status remains visible. Hypotheses are labeled in review comments,
+repository reports, JSON, and SARIF (`note` level). Verified blocking findings retain
+their blocking status. Existing static verification labels are supplied by the individual
+detectors; this change does not make every legacy pattern a complete semantic proof.
+
+When a model provider is enabled, the optional critic receives bounded source windows
+and available callers, callees, dependencies, and related tests. It must return structured
+ACCEPT/REJECT/DOWNGRADE decisions citing lines actually supplied. It can reject or lower
+an advisory finding, but cannot restore a structural rejection, promote severity, or
+create verification evidence. Challenges to verified blocking findings are recorded
+for independent adjudication instead of automatically removing the blocker. Citations
+validate source provenance, not the truth of the model's conclusion.
+
+Heuristics mode makes no model calls. With a configured model provider, disable only
+the contextual critic using `--no-llm-critic` or `SENTINEL_LLM_CRITIC=false` (the latter
+is also a GitHub Actions repository variable). Broader model project advice remains
+separately enabled by the provider. Configure the critic budget through the Python API:
+
+```python
+from sentinel.config import default_config
+
+default_config.llm_critic_enabled = True
+default_config.llm_critic_max_findings = 8
+default_config.llm_critic_context_chars = 12000
+```
+
+The default allows up to eight critic calls per review, plus the existing project
+assessment/summary call. The character budget applies to serialized source excerpts;
+fixed instructions and candidate metadata are additional. Duplicate findings and
+structural rejections do not consume model calls. Unavailable models, invalid outputs,
+unavailable context, and exhausted budgets are disclosed in critic limitations, while
+deterministic decisions remain in force. Calls use the existing configured LLM timeout.
+
+### Executable project validation
+
+Repository reviews remain static by default. Add `--checks` to request tool-based
+validation; these results affect the final outcome independently of advisory findings.
+
+```powershell
+python -m pip install -e ".[dev,checks]"
+docker build -f Dockerfile.checks -t sentinel-checks:local .
+python -m sentinel.cli --repo . --provider heuristics --checks all --markdown review.md --sarif review.sarif
+
+# Select checks; dependency and secret scanning do not need Docker.
+python -m sentinel.cli --repo . --provider heuristics --checks dependencies,secrets
+python -m sentinel.cli --repo . --provider heuristics --checks lint,types,tests,build --check-timeout 300
+```
+
+| Check | Implementation and scope |
+| --- | --- |
+| `lint` | Ruff, using the target's configuration; this repository starts with correctness rules. |
+| `types` | mypy, using target configuration; this repository also checks bodies of untyped functions. |
+| `tests` | Runs the actual pytest suite; failures block, collection errors and zero collected tests are incomplete. |
+| `build` | Builds an sdist and wheel with `python -m build --no-isolation`; dependencies must already exist in the image. |
+| `dependencies` | pip-audit against exact package pins in `requirements-audit.txt`, including transitive dependencies. No dependency installation or metadata execution. |
+| `secrets` | Local patterns for private-key headers, GitHub tokens, AWS access-key identifiers, and Slack tokens. Reports locations and rule IDs with values redacted. |
+
+The four executable checks run as an unprivileged user in disposable, network-disabled
+Docker containers with no host mounts; the snapshot is streamed into bounded temporary storage,
+CPU/memory/process limits, and a timeout. Raw tool output is withheld from published
+reports because it may contain source or credentials. Re-run the corresponding tool
+locally in a trusted checkout for full diagnostic text. No host execution fallback
+is used if Docker, an image, or required dependencies are unavailable.
+
+`Dockerfile.checks` prepares SentinelPR's dependencies from the pinned requirements.
+For another project, prepare a **trusted** image with its runtime, test, build, and
+validation dependencies, then supply `--check-image YOUR_IMAGE`. Before running tools,
+the container checks installed versions against supplied pins and declared runtime/build
+requirements. A mismatch is incomplete and requires rebuilding the trusted image. Tests requiring network access or external services
+need an appropriate offline fixture/environment; they are not silently skipped.
+
+Dependency auditing is the sole online check: it queries the vulnerability service
+with package names and versions, from a sanitized temporary requirements file. Use
+`--requirements PATH` for a different file, relative to the target directory. Exact
+`name==version` lines and comments are supported; ranges, URL/VCS requirements,
+recursive includes, hashes, and environment markers currently produce an incomplete
+result. Keep all transitive pins current; a clean audit of an incomplete lock does
+not certify the entire dependency graph. Regenerate this repository's lock with
+`pip-compile --extra dev --extra checks --strip-extras --no-emit-index-url --no-emit-trusted-host --output-file requirements-audit.txt pyproject.toml`
+(using separately installed `pip-tools`), and rebuild the image.
+
+Secret scanning covers the current snapshot, **not Git history** or every possible
+credential format. Git-tracked files are included even when ignored (for example a
+tracked `.env`); ignored untracked files are excluded. Snapshots omit dependency,
+build, and VCS directories, never follow links, and limit files to 2 MB each,
+32 MB total, and 5,000 files. Linked, unreadable, or over-budget files make otherwise
+passing validation incomplete. Check results carry a snapshot digest and are included
+in Markdown and SARIF; GitHub also exports structured JSON. `--checks` currently
+requires `--repo` locally; the GitHub entry point runs checks on the immutable full
+head snapshot when `SENTINEL_CHECKS=all` is set.
 
 ### Option A: Command-Line Interface (CLI)
 
@@ -237,53 +417,29 @@ SentinelPR operates as an automated GitHub Pull Request quality gate. When confi
 
 ### Step-by-Step GitHub Setup Guide
 
-#### Step 1: Add the Workflow File
+#### Step 1: Use the maintained workflow
 
-Create `.github/workflows/sentinel_review.yml` in your repository:
+Use [.github/workflows/sentinel_review.yml](.github/workflows/sentinel_review.yml).
+It checks out reviewer code from the event's **base SHA**, checks out the target at
+its **head SHA**, and installs only the trusted reviewer on the runner. Target tests
+and build hooks execute in offline containers with no API keys or GitHub token.
 
-```yaml
-name: SentinelPR Auto Code Review
+The reviewer reads Git blobs and the diff from the merge base to the exact head,
+including base source for regression comparison. It checks that the PR is still open
+and its base/head SHAs are current before and after analysis. A stale run does not
+publish. Incomplete or infrastructure-error outcomes can only post a comment, never
+an approval. Failed validation requests changes. Exit codes remain 0/1/2/3 for
+clean/changes-required/incomplete/infrastructure failure.
 
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+Fork and Dependabot runs retain report artifacts without trying to write a review.
+All runs attempt to archive Markdown, SARIF, and structured JSON. Permissions or
+repository policies can still restrict publication.
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install SentinelPR
-        run: |
-          pip install -e .
-
-      - name: Run SentinelPR Automated Review
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
-          SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || secrets.SENTINEL_BASE_URL || '' }}
-          FAST_MODEL: ${{ vars.FAST_MODEL || secrets.FAST_MODEL || '' }}
-          FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || secrets.FRONTIER_MODEL || '' }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python -m sentinel.github
-```
+**Initial rollout:** these reviewer changes and `Dockerfile.checks` must exist on the
+trusted base branch before PRs can use the new workflow. Validate this feature with
+the local commands and the manual audit during rollout. To adopt SentinelPR in a
+different repository, install a separately pinned, trusted SentinelPR checkout and
+provide a prepared image with that target's dependencies.
 
 #### Step 2: Grant Workflow Permissions
 
@@ -328,71 +484,11 @@ In addition to automated PR quality gates, SentinelPR supports on-demand whole-r
 
 ### Workflow Configuration
 
-The manual repository audit workflow is configured in `.github/workflows/sentinel_repo_audit.yml`:
-
-```yaml
-name: SentinelPR Repository Audit
-
-on:
-  workflow_dispatch: # Strictly manual trigger from GitHub web UI
-
-permissions:
-  contents: read
-  security-events: write # Enables SARIF upload to GitHub Code Scanning
-
-jobs:
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install SentinelPR
-        run: |
-          pip install -e .
-
-      - name: Run SentinelPR Repository Review
-        env:
-          SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
-          SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || secrets.SENTINEL_BASE_URL || '' }}
-          FAST_MODEL: ${{ vars.FAST_MODEL || secrets.FAST_MODEL || '' }}
-          FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || secrets.FRONTIER_MODEL || '' }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python -m sentinel.cli --repo . --markdown repo-review.md --sarif repo-review.sarif
-
-      - name: Publish Review to GitHub Job Summary
-        if: always()
-        run: |
-          if [ -f repo-review.md ]; then
-            cat repo-review.md >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        continue-on-error: true
-        with:
-          sarif_file: repo-review.sarif
-
-      - name: Archive Review Artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: sentinelpr-repo-review
-          path: |
-            repo-review.md
-            repo-review.sarif
-```
+The maintained [.github/workflows/sentinel_repo_audit.yml](.github/workflows/sentinel_repo_audit.yml)
+builds the prepared check image, runs `--repo . --checks all`, publishes a job summary,
+and uploads Markdown/SARIF artifacts. SARIF upload to Code Scanning depends on the
+repository's GitHub plan and settings. Run this manual workflow only on a trusted
+branch: its workflow and environment preparation execute that branch's code.
 
 ### How to Trigger Manually on GitHub
 
@@ -458,7 +554,7 @@ SentinelPR/
 |       +-- harness/
 |           +-- sandbox.py                 # Ephemeral isolated test execution harness
 |           +-- eval_suite.py              # Synthetic PR benchmark runner
-+-- tests/                                 # Pytest test suite (57 test cases across 8 suites)
++-- tests/                                 # Pytest test suite
 ```
 
 ---

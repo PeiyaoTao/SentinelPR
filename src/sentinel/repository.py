@@ -58,17 +58,17 @@ def _list_files(root: Path) -> list[str]:
             capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
         )
         if result.returncode == 0:
-            files = subprocess.run(
+            listed_files = subprocess.run(
                 ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."],
                 capture_output=True, check=True,
             )
-            return sorted(set(os.fsdecode(p) for p in files.stdout.split(b"\0") if p))
+            return sorted(set(os.fsdecode(p) for p in listed_files.stdout.split(b"\0") if p))
         if "not a git repository" not in result.stderr.lower():
             raise RuntimeError(f"Cannot inspect repository: {result.stderr.strip()}")
     elif any((parent / ".git").exists() for parent in (root, *root.parents)):
         raise RuntimeError("Git is required to honor this repository's ignore rules.")
 
-    paths = []
+    paths: list[str] = []
     def fail_walk(error: OSError) -> None:
         raise error
     for directory, dirs, files in os.walk(root, followlinks=False, onerror=fail_walk):
@@ -150,12 +150,13 @@ def repository_symbols(path: str, content: str) -> list[ASTSymbolScope]:
     """Non-overlapping top-level scopes preserve decorators and exact source offsets."""
     tree = ast.parse(content, filename=path)
     lines = content.splitlines()
-    imports = [ast.get_source_segment(content, n) for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    imports = [segment for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom)) if (segment := ast.get_source_segment(content, n)) is not None]
     scopes = []
     for node in tree.body:
         decorators = getattr(node, "decorator_list", [])
         start = min([node.lineno, *(d.lineno for d in decorators)])
         end = node.end_lineno
+        assert end is not None, "Parsed statements have an end line"
         snippet = "\n".join(lines[start - 1:end])
         scopes.append(ASTSymbolScope(
             symbol_name=getattr(node, "name", "module_scope"),

@@ -1,0 +1,10 @@
+# Build from a trusted checkout. Project dependencies must be prepared here,
+# never downloaded while executing the target tests or build backend.
+FROM python:3.11-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/sentinel
+COPY pyproject.toml README.md requirements-audit.txt ./
+COPY src ./src
+RUN python -m pip install --no-cache-dir -r requirements-audit.txt && python -m pip install --no-cache-dir --no-deps .
+WORKDIR /tmp
+USER 65534:65534
