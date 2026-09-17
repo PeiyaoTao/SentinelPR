@@ -42,11 +42,29 @@ jobs:
 
       - name: Install trusted reviewer
         run: |
-          python -m pip install -r reviewer/requirements-audit.txt
-          python -m pip install --no-deps ./reviewer
+          if [ -f "reviewer/requirements-audit.txt" ]; then
+            echo "Installing reviewer from trusted base revision..."
+            python -m pip install -r reviewer/requirements-audit.txt
+            python -m pip install --no-deps ./reviewer
+          elif [ -f "target/requirements-audit.txt" ]; then
+            echo "Base branch missing requirements-audit.txt (bootstrap rollout); installing from target PR revision..."
+            python -m pip install -r target/requirements-audit.txt
+            python -m pip install --no-deps ./target
+          else
+            echo "No requirements-audit.txt found; installing base reviewer..."
+            python -m pip install --no-deps ./reviewer
+          fi
 
       - name: Prepare trusted offline check environment
-        run: docker build -f reviewer/Dockerfile.checks -t sentinel-checks:local reviewer
+        run: |
+          if [ -f "reviewer/Dockerfile.checks" ]; then
+            docker build -f reviewer/Dockerfile.checks -t sentinel-checks:local reviewer
+          elif [ -f "target/Dockerfile.checks" ]; then
+            echo "Base branch missing Dockerfile.checks (bootstrap rollout); building from target PR revision..."
+            docker build -f target/Dockerfile.checks -t sentinel-checks:local target
+          else
+            echo "No Dockerfile.checks found; skipping container check image build."
+          fi
 
       - name: Run review and project validation
         env:
@@ -56,7 +74,7 @@ jobs:
           SENTINEL_CHECKS: all
           SENTINEL_CHECK_IMAGE: sentinel-checks:local
           SENTINEL_PUBLISH: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
-          SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || 'heuristics' }}
+          SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
           SENTINEL_LLM_CRITIC: ${{ vars.SENTINEL_LLM_CRITIC || 'true' }}
           SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || '' }}
           FAST_MODEL: ${{ vars.FAST_MODEL || '' }}
