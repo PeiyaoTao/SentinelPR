@@ -3,7 +3,6 @@ Logic Agent: Identifies logic flaws, concurrency hazards, mutable defaults, and 
 """
 
 import ast
-import re
 from typing import Any, Dict, List
 import uuid
 
@@ -15,6 +14,27 @@ from sentinel.state import (
     ProofStatus,
     Severity,
 )
+
+
+def _scope_nodes(node: ast.AST):
+    """Walk a lexical body without mixing declarations from nested scopes."""
+    yield node
+    for child in ast.iter_child_nodes(node):
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            yield from _scope_nodes(child)
+
+
+def global_mutations(tree: ast.AST) -> list[tuple[ast.AugAssign, str]]:
+    mutations = []
+    for scope in ast.walk(tree):
+        if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        nodes = list(_scope_nodes(scope))
+        names = {name for node in nodes if isinstance(node, ast.Global) for name in node.names}
+        for node in nodes:
+            if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id in names:
+                mutations.append((node, node.target.id))
+    return mutations
 
 
 def analyze_symbol_logic(symbol: ASTSymbolScope) -> List[Finding]:
@@ -86,26 +106,19 @@ def analyze_symbol_logic(symbol: ASTSymbolScope) -> List[Finding]:
                         )
                     )
 
-    # Check 3: Concurrency / Shared State non-atomic mutation heuristic
-    if re.search(r"global\s+\w+", code) and ("+=" in code or "-=" in code):
-        findings.append(
-            Finding(
-                id=f"LOGIC-{uuid.uuid4().hex[:8]}",
-                category=FindingCategory.LOGIC,
-                severity=Severity.HIGH,
-                file_path=symbol.file_path,
-                start_line=symbol.start_line,
-                end_line=symbol.end_line,
-                title="Potential Thread-Safety Hazard on Global State",
-                explanation=(
-                    f"Symbol '{symbol.symbol_name}' modifies global state using in-place operations. "
-                    "In multi-threaded environments, this causes race conditions due to non-atomic byte code execution."
-                ),
-                suggested_fix="Protect shared state access with threading.Lock or encapsulate within a thread-safe context.",
-                trust_zone=symbol.trust_zone,
-                proof_status=ProofStatus.UNTESTED,
-            )
-        )
+    # A syntactic global mutation is a hypothesis, not proof of concurrent access.
+    for node, name in global_mutations(tree):
+        line = symbol.start_line + node.lineno - 1
+        findings.append(Finding(
+            id=f"LOGIC-{uuid.uuid4().hex[:8]}", rule_id="logic.global-mutation",
+            category=FindingCategory.LOGIC, severity=Severity.HIGH,
+            file_path=symbol.file_path, start_line=line, end_line=line,
+            title="Global mutation needs concurrency context",
+            explanation=f"Augmented assignment mutates declared global '{name}'. Concurrent access and synchronization have not been established; this is a hypothesis, not a demonstrated race.",
+            suggested_fix="Inspect callers and synchronization before changing the code. If concurrent unsynchronized access is possible, protect the shared operation or remove shared mutable state.",
+            trust_zone=symbol.trust_zone, proof_status=ProofStatus.UNTESTED,
+            hypothesis=True,
+        ))
 
     return findings
 

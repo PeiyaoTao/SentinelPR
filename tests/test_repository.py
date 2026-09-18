@@ -40,7 +40,8 @@ def test_review_unchanged_code_without_execution(tmp_path, monkeypatch):
     finding = next(f for f in state["verified_findings"] if "Mutable Default" in f.title)
     assert finding.start_line == 4
     assert finding.reproduction_script is None
-    assert report.review_outcome == ReviewOutcome.CHANGES_REQUIRED
+    assert report.review_outcome == ReviewOutcome.CLEAN
+    assert finding.hypothesis
     assert report.inline_comments == []
     assert report.out_of_hunk_notes == []
     assert "Repository Review" in report.summary_markdown
@@ -89,7 +90,7 @@ def test_unsupported_and_invalid_source_are_disclosed(tmp_path):
 
 
 def test_blocking_findings_do_not_hide_incomplete_coverage(tmp_path):
-    write(tmp_path, "core.py", "def collect(items=[]): return items\n")
+    write(tmp_path, "core.py", "api_key = 'abcdefghijklmnop1234'\n")
     write(tmp_path, "ui.ts", "export const n = 1;\n")
     report = review_repository(tmp_path)["consolidated_report"]
     assert report.review_outcome == ReviewOutcome.CHANGES_REQUIRED
@@ -204,7 +205,7 @@ def test_invalid_model_evidence_is_disclosed_not_published(tmp_path, monkeypatch
 
 
 def test_cli_repository_exports_and_exit_code(tmp_path, monkeypatch, capsys):
-    write(tmp_path, "core.py", "def collect(items=[]): return items\n")
+    write(tmp_path, "core.py", "api_key = 'abcdefghijklmnop1234'\n")
     markdown, sarif = tmp_path / "report.md", tmp_path / "report.sarif"
     monkeypatch.setattr("sys.argv", ["sentinel", "--repo", str(tmp_path), "--provider", "heuristics", "--markdown", str(markdown), "--sarif", str(sarif)])
     with pytest.raises(SystemExit) as result:

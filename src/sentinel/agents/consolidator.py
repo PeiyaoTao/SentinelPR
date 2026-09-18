@@ -3,9 +3,10 @@ Consolidator Agent: Validates diff-hunk line offsets (preventing GitHub 422 erro
 and generates GitHub PR comments and standard SARIF 2.1.0 output.
 """
 
+from sentinel.quality.render import render_quality, append_quality_sarif
+
 import ast
 import json
-import logging
 from typing import Any, Dict, List, Set
 
 from sentinel.state import (
@@ -16,9 +17,6 @@ from sentinel.state import (
     ReviewOutcome,
     Severity,
 )
-
-logger = logging.getLogger(__name__)
-
 
 def get_hunk_line_ranges(hunks: List[DiffHunk]) -> Dict[str, Set[int]]:
     """
@@ -50,7 +48,7 @@ def generate_sarif(verified_findings: List[Finding]) -> Dict[str, Any]:
     seen_rules = set()
 
     for finding in verified_findings:
-        rule_id = finding.category.value
+        rule_id = finding.rule_id or finding.category.value
         if rule_id not in seen_rules:
             seen_rules.add(rule_id)
             rules.append({
@@ -60,13 +58,14 @@ def generate_sarif(verified_findings: List[Finding]) -> Dict[str, Any]:
             })
 
         sarif_level = "error" if finding.severity.value in ["CRITICAL", "HIGH"] else "warning"
-        if finding.severity.value in ["LOW", "SUGGESTION"]:
+        if finding.hypothesis or finding.severity.value in ["LOW", "SUGGESTION"]:
             sarif_level = "note"
 
         results.append({
             "ruleId": rule_id,
             "level": sarif_level,
             "message": {"text": f"[{finding.title}] {finding.explanation}"},
+            "properties": {"hypothesis": finding.hypothesis, "proofStatus": finding.proof_status.value},
             "locations": [
                 {
                     "physicalLocation": {
@@ -120,6 +119,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
         comment_body = (
             f"### SentinelPR: {finding.title}\n"
             f"**Severity**: `{finding.severity.value}` | **Category**: `{finding.category.value}` | **Zone**: `{finding.trust_zone.value}`\n\n"
+            f"**Evidence classification**: {'Advisory hypothesis' if finding.hypothesis else finding.proof_status.value}\n\n"
             f"{finding.explanation}\n\n"
         )
         # Structured Suggestions: Only emit ```suggestion when exact replacement produces valid syntax
@@ -150,8 +150,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
                 guidance = finding.remediation_guidance or finding.suggested_fix or finding.exact_replacement.replacement_text
                 comment_body += f"**Suggested Fix**:\n{guidance}\n\n"
         elif finding.remediation_guidance or finding.suggested_fix:
-            guidance = finding.remediation_guidance or finding.suggested_fix
-            comment_body += f"**Suggested Fix**:\n{guidance}\n\n"
+            comment_body += f"**Suggested Fix**:\n{finding.remediation_guidance or finding.suggested_fix}\n\n"
 
         if finding.critic_reasoning:
             comment_body += f"> *Critic Gate Verdict: {finding.critic_reasoning}*"
@@ -186,44 +185,12 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
         model_display = f"`{default_config.fast_model}`"
     else:
         model_display = f"Fast: `{default_config.fast_model}` | Frontier: `{default_config.frontier_model}`"
-    status_label = "Clean (Approved)" if not verified_findings else f"{accepted_count} Action(s) Required"
+    status_label = "CLEAN" if not verified_findings else f"{accepted_count} Finding(s) Retained"
 
     summary_lines = [
         "## SentinelPR Quality Gate Report",
         f"**Engine**: {engine_name} ({model_display}) | **Evaluated**: {total_candidates} candidate findings | **Status**: {status_label}\n",
     ]
-
-    # Executive qualitative review from LLM when enabled
-    if default_config.provider != "heuristics":
-        try:
-            from sentinel.llm import get_llm_client
-            client = get_llm_client(tier="fast")
-            diff_text = state.get("diff", "")
-            changed_files = state.get("changed_files", [])
-            files_summary = ", ".join(changed_files[:15])
-            if len(changed_files) > 15:
-                files_summary += f" and {len(changed_files) - 15} more"
-
-            risk_val = risk_assessment.risk_level.value if risk_assessment else "LOW"
-            churn_val = risk_assessment.total_churn_lines if risk_assessment else 0
-
-            finding_highlights = [f"- [{f.severity.value}] {f.title} ({f.file_path})" for f in verified_findings[:5]]
-            findings_text = "\n".join(finding_highlights) if finding_highlights else "No code defects found."
-
-            prompt = (
-                f"You are SentinelPR, an autonomous staff code reviewer. Write a concise 2-sentence executive review summary for this pull request.\n"
-                f"Files modified ({len(changed_files)}): {files_summary}\n"
-                f"Total churn: {churn_val} lines\n"
-                f"Defects Found: {accepted_count}\n"
-                f"Finding Highlights:\n{findings_text}\n"
-                f"PR Risk Level: {risk_val} (based on churn and blast radius)\n"
-                "Provide an accurate, balanced assessment reflecting the full scope of changes across all files. Do not assume the PR is limited to documentation or a single file. Be direct and constructive."
-            )
-            llm_summary = client.complete([{"role": "user", "content": prompt}]).strip()
-            if llm_summary:
-                summary_lines.append(f"> **Reviewer Assessment**: {llm_summary}\n")
-        except (RuntimeError, ValueError, KeyError) as err:
-            logger.warning("Could not generate executive review summary: %s", err)
 
     if verified_findings:
         summary_lines.append("| Category | Severity | File | Line | Title |")
@@ -241,12 +208,12 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
         summary_lines.append("")
 
     if risk_assessment:
-        summary_lines.append("### PR Risk & Blast Radius")
-        summary_lines.append(f"- **Risk Level**: `{risk_assessment.risk_level.value}`")
-        summary_lines.append(f"- **Complexity Delta**: `{risk_assessment.cyclomatic_complexity}` decision points")
+        summary_lines.append("### PR Review Effort & Blast Radius")
+        summary_lines.append(f"- **Review effort**: `{risk_assessment.risk_level.value}`")
+        summary_lines.append(f"- **Changed-scope complexity sum**: `{risk_assessment.cyclomatic_complexity}` (sum of scope scores; nested scopes may overlap)")
         summary_lines.append(f"- **Total Churn**: `{risk_assessment.total_churn_lines}` lines")
         summary_lines.append(f"- **Perimeter Exposed**: `{risk_assessment.perimeter_symbols_count}` public symbols")
-        summary_lines.append(f"- **Test Coverage Included**: `{'Yes' if risk_assessment.has_test_coverage else 'No'}`\n")
+        summary_lines.append(f"- **Test files changed**: `{'Yes' if risk_assessment.has_test_coverage else 'No'}`\n")
 
     uninspected_files = state.get("uninspected_files", [])
     risk_indicators = state.get("risk_indicators", [])
@@ -254,11 +221,14 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
     has_blocking = any(f.severity in [Severity.CRITICAL, Severity.HIGH] for f in verified_findings)
     if has_blocking:
         review_outcome = ReviewOutcome.CHANGES_REQUIRED
-    elif uninspected_files:
+    elif uninspected_files or (state.get("quality_review") and not state["quality_review"].complete):
         review_outcome = ReviewOutcome.INCOMPLETE_REVIEW
     else:
         review_outcome = ReviewOutcome.CLEAN
 
+    summary_lines[1] = (
+        f"**Engine**: {engine_name} ({model_display}) | **Evaluated**: {total_candidates} candidate findings | **Status**: {review_outcome.value}\n"
+    )
     if uninspected_files:
         summary_lines.append("> [!WARNING]")
         summary_lines.append(f"> **Incomplete Analysis**: {len(uninspected_files)} changed file(s) could not be inspected:")
@@ -266,10 +236,15 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
             summary_lines.append(f"> - `{uf}`")
         summary_lines.append("")
 
-    summary_markdown = "\n".join(summary_lines)
-    sarif = generate_sarif(verified_findings)
+    if state.get("critic_limitations"):
+        summary_lines.extend(["### Critic limitations", "", *(f"- {note}" for note in state["critic_limitations"]), ""])
+    summary_markdown = "\n".join(summary_lines) + "\n\n" + render_quality(state.get("quality_review"))
+    sarif = append_quality_sarif(generate_sarif(verified_findings), state.get("quality_review"))
 
     report = ConsolidatedReport(
+        critic_audit=state.get("critic_audit", []),
+        critic_limitations=state.get("critic_limitations", []),
+        quality_review=state.get("quality_review"),
         summary_markdown=summary_markdown,
         review_outcome=review_outcome,
         inline_comments=inline_comments,
@@ -283,4 +258,9 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
         uninspected_files=uninspected_files,
     )
 
+    from sentinel.checks.report import refresh_executive_summary
+    from sentinel.critic_report import render_critic_audit
+    report.summary_markdown += render_critic_audit(report.critic_audit)
+    report.sarif_json["runs"][0].setdefault("properties", {})["criticAudit"] = [entry.model_dump(mode="json") for entry in report.critic_audit]
+    refresh_executive_summary(report)
     return {"consolidated_report": report, "review_outcome": review_outcome}

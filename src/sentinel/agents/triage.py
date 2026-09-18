@@ -176,10 +176,10 @@ def slice_ast_symbols(file_path: str, full_code: str, changed_lines: Set[int]) -
 
     lines = full_code.splitlines()
 
-    for node in tree.body:
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            start = node.lineno - 1
-            end = node.end_lineno if hasattr(node, "end_lineno") and node.end_lineno else node.lineno
+    for import_node in tree.body:
+        if isinstance(import_node, (ast.Import, ast.ImportFrom)):
+            start = import_node.lineno - 1
+            end = import_node.end_lineno or import_node.lineno
             imports.append("\n".join(lines[start:end]))
 
     covered_lines: Set[int] = set()

@@ -102,6 +102,11 @@ def _export_report(report, markdown_path, sarif_path) -> None:
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(
         description="SentinelPR: Autonomous Code Reviewer & PR Quality Gate"
     )
@@ -146,7 +151,28 @@ def main():
 
     parser.add_argument("--markdown", metavar="PATH", help="Write the complete review as Markdown")
 
+    parser.add_argument("--baseline", metavar="PATH", help="Compare repository quality findings with a saved baseline")
+    parser.add_argument("--save-baseline", metavar="PATH", help="Save a complete repository quality review as a baseline")
+    parser.add_argument("--checks", help="Comma-separated project checks or all: lint,types,tests,build,dependencies,secrets (requires --repo)")
+    parser.add_argument("--check-image", default="sentinel-checks:local", help="Prepared offline validation image")
+    parser.add_argument("--check-timeout", type=int, default=300, help="Timeout in seconds per validation tool")
+    parser.add_argument("--requirements", default="requirements-audit.txt", help="Pinned audit requirements path relative to the repository")
+    parser.add_argument("--no-llm-critic", action="store_true", help="Disable optional contextual model criticism; keep deterministic evidence checks")
+    parser.add_argument("--no-llm-quality", action="store_true", help="Disable contextual quality advice; preserve static quality observations")
     args = parser.parse_args()
+    from sentinel.checks.models import CHECK_NAMES
+    selected_checks = list(CHECK_NAMES) if args.checks == "all" else (args.checks.split(",") if args.checks else [])
+    if args.checks and (args.repo is None or any(name not in CHECK_NAMES for name in selected_checks)):
+        parser.error("--checks requires --repo and a valid comma-separated check selection")
+    if args.check_timeout < 1:
+        parser.error("--check-timeout must be positive")
+    if (args.baseline or args.save_baseline) and args.repo is None:
+        parser.error("Quality baselines require --repo")
+
+    if args.no_llm_quality:
+        default_config.llm_quality_enabled = False
+    if args.no_llm_critic:
+        default_config.llm_critic_enabled = False
 
     # Override config if CLI arguments passed
     if args.provider:
@@ -159,10 +185,17 @@ def main():
 
     if args.repo is not None:
         try:
-            result = review_repository(args.repo)
+            result = review_repository(args.repo, baseline_path=args.baseline)
             report = result["consolidated_report"]
+            if selected_checks:
+                from sentinel.checks.runner import run_checks
+                from sentinel.checks.report import attach_validation
+                attach_validation(report, run_checks(args.repo, selected_checks, args.check_image, args.check_timeout, args.requirements))
             print(report.summary_markdown)
             _export_report(report, args.markdown, args.sarif)
+            if args.save_baseline:
+                from sentinel.quality.baseline import save_baseline
+                save_baseline(report, args.save_baseline)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
             sys.stderr.write(f"Repository review failed: {error}\n")
             sys.exit(3)
@@ -228,6 +261,8 @@ def main():
     if report:
         from sentinel.formatter import print_colored_report
         print_colored_report(report, verified_findings)
+        from sentinel.quality.render import render_quality
+        print(render_quality(report.quality_review))
 
         _export_report(report, args.markdown, args.sarif)
         sys.exit(_outcome_exit_code(report.review_outcome))

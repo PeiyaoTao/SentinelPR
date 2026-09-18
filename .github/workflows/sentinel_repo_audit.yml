@@ -10,11 +10,13 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -23,11 +25,19 @@ jobs:
 
       - name: Install SentinelPR
         run: |
-          pip install -e .
+          python -m pip install -r requirements-audit.txt
+          python -m pip install --no-deps .
+
+      - name: Prepare offline check environment
+        run: docker build -f Dockerfile.checks -t sentinel-checks:local .
 
       - name: Run SentinelPR Repository Review
         env:
           SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
+          SENTINEL_LLM_CRITIC: ${{ vars.SENTINEL_LLM_CRITIC || 'true' }}
+          SENTINEL_LLM_QUALITY: ${{ vars.SENTINEL_LLM_QUALITY || 'true' }}
+          SENTINEL_QUALITY_MAX_GROUPS: ${{ vars.SENTINEL_QUALITY_MAX_GROUPS || '5' }}
+          SENTINEL_QUALITY_CONTEXT_CHARS: ${{ vars.SENTINEL_QUALITY_CONTEXT_CHARS || '18000' }}
           SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || secrets.SENTINEL_BASE_URL || '' }}
           FAST_MODEL: ${{ vars.FAST_MODEL || secrets.FAST_MODEL || '' }}
           FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || secrets.FRONTIER_MODEL || '' }}
@@ -35,7 +45,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          python -m sentinel.cli --repo . --markdown repo-review.md --sarif repo-review.sarif
+          python -m sentinel.cli --repo . --checks all --markdown repo-review.md --sarif repo-review.sarif
 
       - name: Publish Review to GitHub Job Summary
         if: always()

@@ -1,160 +1,97 @@
-"""
-GitHub Actions PR Auto-Reviewer Integration.
-Fetches PR diff via GitHub API, executes SentinelPR review, and submits
-an automated review with inline comments and suggested code changes.
-"""
-
+"""Review immutable PR commits and publish only a current, explicit outcome."""
 import json
 import os
+from pathlib import Path
+import subprocess
 import sys
-from typing import Any, Dict, List
+import tempfile
+
 import requests
 
 from sentinel.graph import review_pr
-from sentinel.state import ReviewOutcome, Severity
+from sentinel.git_snapshot import load_pr_snapshot, materialize_commit
+from sentinel.state import ReviewOutcome
+
+EXIT_CODES = {ReviewOutcome.CLEAN: 0, ReviewOutcome.CHANGES_REQUIRED: 1,
+              ReviewOutcome.INCOMPLETE_REVIEW: 2, ReviewOutcome.INFRASTRUCTURE_FAILURE: 3}
+
+
+def review_event(outcome: ReviewOutcome, has_findings: bool = False) -> str:
+    if outcome == ReviewOutcome.CHANGES_REQUIRED:
+        return "REQUEST_CHANGES"
+    if outcome != ReviewOutcome.CLEAN or has_findings:
+        return "COMMENT"
+    return "APPROVE"
+
+
+def _current_revision(url: str, headers: dict, head: str, base: str) -> bool:
+    response = requests.get(url, headers=headers, timeout=30)
+    response.raise_for_status()
+    current = response.json()
+    return current["head"]["sha"] == head and current["base"]["sha"] == base and current["state"] == "open"
 
 
 def run_github_auto_review():
-    """Entrypoint for GitHub Actions automated pull request quality gate."""
-    token = os.getenv("GITHUB_TOKEN")
-    repo = os.getenv("GITHUB_REPOSITORY")
-    event_path = os.getenv("GITHUB_EVENT_PATH")
-
+    token, repo, event_path = (os.getenv(key) for key in ("GITHUB_TOKEN", "GITHUB_REPOSITORY", "GITHUB_EVENT_PATH"))
     if not token or not repo or not event_path:
-        sys.stderr.write("Error: GITHUB_TOKEN, GITHUB_REPOSITORY, and GITHUB_EVENT_PATH must be set.\n")
-        sys.exit(1)
-
-    with open(event_path, "r", encoding="utf-8") as f:
-        event = json.load(f)
-
+        raise ValueError("GITHUB_TOKEN, GITHUB_REPOSITORY, and GITHUB_EVENT_PATH must be set")
+    event = json.loads(Path(event_path).read_text(encoding="utf-8"))
     pr = event.get("pull_request")
     if not pr:
         print("Not a pull request event. Skipping SentinelPR review.")
         return
-
-    pr_number = pr["number"]
-    pr_head_sha = pr["head"]["sha"]
-    print(f"Running SentinelPR on {repo} PR #{pr_number} (Commit: {pr_head_sha})...")
-
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3.diff",
-    }
-
-    # Fetch PR unified diff
-    diff_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
-    diff_resp = requests.get(diff_url, headers=headers, timeout=30)
-    diff_resp.raise_for_status()
-    diff_text = diff_resp.text
-
-    # Fetch all changed files with pagination
-    changed_files: List[Dict[str, Any]] = []
-    page = 1
-    api_headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-    while True:
-        files_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/files?page={page}&per_page=100"
-        files_resp = requests.get(files_url, headers=api_headers, timeout=30)
-        files_resp.raise_for_status()
-        data = files_resp.json()
-        if not data:
-            break
-        changed_files.extend(data)
-        if len(data) < 100 or "next" not in files_resp.links:
-            break
-        page += 1
-
-    head_files: Dict[str, str] = {}
-    uninspected_files: List[str] = []
-    for f in changed_files:
-        filename = f.get("filename")
-        if not filename:
-            continue
-        if os.path.exists(filename) and os.path.isfile(filename):
-            try:
-                with open(filename, "r", encoding="utf-8", errors="replace") as fh:
-                    head_files[filename] = fh.read()
-            except (OSError, UnicodeDecodeError) as e:
-                sys.stderr.write(f"Warning: Could not read head file '{filename}': {e}\n")
-                uninspected_files.append(filename)
-        else:
-            if f.get("status") != "removed":
-                uninspected_files.append(filename)
-
-    # Run SentinelPR review
-    result = review_pr(diff=diff_text, head_files=head_files, uninspected_files=uninspected_files)
-    report = result.get("consolidated_report")
-    verified_findings = result.get("verified_findings", [])
-
-    if not report:
-        sys.stderr.write("Review completed with no report generated.\n")
-        sys.exit(3)
-
-    # Construct GitHub Review Payload
-    comments: List[Dict[str, Any]] = []
-    for comment in report.inline_comments:
-        comments.append({
-            "path": comment["path"],
-            "line": comment["line"],
-            "side": comment.get("side", "RIGHT"),
-            "body": comment["body"],
-        })
-
-    # Determine GitHub Review Event
-    has_severe = any(f.severity in [Severity.CRITICAL, Severity.HIGH] for f in verified_findings)
-    if has_severe:
-        event_type = "REQUEST_CHANGES"
-    elif verified_findings:
-        event_type = "COMMENT"
-    else:
-        event_type = "APPROVE"
-
-    review_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews"
-    review_payload = {
-        "commit_id": pr_head_sha,
-        "body": report.summary_markdown,
-        "event": event_type,
-        "comments": comments,
-    }
-
-    submit_resp = requests.post(
-        review_url,
-        json=review_payload,
-        headers=api_headers,
-        timeout=30,
-    )
-
-    published = False
-    if submit_resp.status_code in [200, 201]:
-        print(f"Successfully posted SentinelPR review to PR #{pr_number} (Status: {event_type})")
-        published = True
-    else:
-        sys.stderr.write(f"Failed to post review: {submit_resp.status_code} {submit_resp.text}\n")
-        # Fallback: post general issue comment if inline comments fail on hunk mismatch
-        fallback_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-        fb_resp = requests.post(
-            fallback_url,
-            json={"body": report.summary_markdown},
-            headers=api_headers,
-            timeout=30,
-        )
-        if fb_resp.status_code in [200, 201]:
-            print(f"Posted fallback review comment to PR #{pr_number}")
-            published = True
-        else:
-            sys.stderr.write(f"Failed to post fallback comment: {fb_resp.status_code} {fb_resp.text}\n")
-
-    if not published:
-        sys.stderr.write("Fatal: Failed to publish review via both review API and issue comment fallback.\n")
-        sys.exit(3)
-
-    # Process exit outcome mapped to CI
-    if report.review_outcome == ReviewOutcome.CHANGES_REQUIRED:
-        sys.exit(1)
-    elif report.review_outcome == ReviewOutcome.INCOMPLETE_REVIEW:
+    root = Path(os.environ.get("SENTINEL_TARGET_PATH", ".")).resolve()
+    number, head, base = pr["number"], pr["head"]["sha"], pr["base"]["sha"]
+    url = f"{os.environ.get('GITHUB_API_URL', 'https://api.github.com')}/repos/{repo}/pulls/{number}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    if not _current_revision(url, headers, head, base):
+        print("PR revision changed or closed; refusing to review a stale event.")
         sys.exit(2)
-    else:
-        sys.exit(0)
+    snapshot = load_pr_snapshot(root, base, head)
+    result = review_pr(snapshot.diff, snapshot.head_files, base_files=snapshot.base_files, uninspected_files=snapshot.uninspected)
+    report = result["consolidated_report"]
+    checks = os.environ.get("SENTINEL_CHECKS", "")
+    if checks:
+        from sentinel.checks.models import CHECK_NAMES
+        from sentinel.checks.runner import run_checks
+        from sentinel.checks.report import attach_validation
+        names = list(CHECK_NAMES) if checks == "all" else checks.split(",")
+        with tempfile.TemporaryDirectory(prefix="sentinel-commit-") as directory:
+            omitted = materialize_commit(root, head, Path(directory))
+            validation = run_checks(directory, names, os.environ.get("SENTINEL_CHECK_IMAGE", "sentinel-checks:local"), requirements=os.environ.get("SENTINEL_REQUIREMENTS", "requirements-audit.txt"))
+            if omitted:
+                for check in validation.results:
+                    if check.status == "passed":
+                        check.status = "incomplete"
+                    check.summary += f" Commit snapshot omitted {len(omitted)} files."
+            attach_validation(report, validation)
+    report.summary_markdown += f"\n\nReviewed commit `{head}` against merge base `{snapshot.merge_base}`.\n"
+    output = Path(os.environ.get("SENTINEL_REPORT_DIR", "sentinel-artifacts"))
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "review.md").write_text(report.summary_markdown, encoding="utf-8")
+    (output / "review.sarif").write_text(json.dumps(report.sarif_json, indent=2), encoding="utf-8")
+    (output / "review.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    if not _current_revision(url, headers, head, base):
+        print("PR revision changed or closed during analysis; report retained, publication skipped.")
+        sys.exit(2)
+    if os.environ.get("SENTINEL_PUBLISH", "true").lower() == "false":
+        print("Publication disabled; review artifacts retained.")
+        sys.exit(EXIT_CODES[report.review_outcome])
+    event_type = review_event(report.review_outcome, bool(result.get("verified_findings")))
+    payload = {"commit_id": head, "body": report.summary_markdown, "event": event_type,
+               "comments": [{"path": c["path"], "line": c["line"], "side": c.get("side", "RIGHT"), "body": c["body"]} for c in report.inline_comments]}
+    response = requests.post(url + "/reviews", json=payload, headers=headers, timeout=30)
+    if response.status_code not in (200, 201):
+        # A fallback comment is informational; CI still uses the review outcome.
+        fallback = requests.post(url.replace(f"/pulls/{number}", f"/issues/{number}") + "/comments", json={"body": report.summary_markdown}, headers=headers, timeout=30)
+        fallback.raise_for_status()
+    sys.exit(EXIT_CODES[report.review_outcome])
 
 
 if __name__ == "__main__":
-    run_github_auto_review()
+    try:
+        run_github_auto_review()
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, requests.RequestException) as error:
+        # Do not print HTTP bodies or target output, which can contain secrets.
+        print(f"GitHub review infrastructure failed ({type(error).__name__}).", file=sys.stderr)
+        sys.exit(3)

@@ -8,7 +8,7 @@ import os
 import sys
 from typing import List
 
-from sentinel.state import ConsolidatedReport, Finding, Severity
+from sentinel.state import ConsolidatedReport, Finding, Severity, ReviewOutcome
 
 # Enable ANSI virtual terminal processing on Windows
 if sys.platform == "win32":
@@ -54,6 +54,10 @@ def print_colored_report(report: ConsolidatedReport, verified_findings: List[Fin
     print(f"{COLOR_BOLD}SentinelPR Quality Gate Analysis{COLOR_RESET}")
     print("=" * 65)
 
+    if not verified_findings and report.review_outcome == ReviewOutcome.INCOMPLETE_REVIEW:
+        print(f"\n{COLOR_YELLOW}{COLOR_BOLD}[INCOMPLETE REVIEW] Some checks could not finish.{COLOR_RESET}\n")
+        return
+
     if not verified_findings:
         print(f"\n{COLOR_GREEN}{COLOR_BOLD}[CLEAN / PASS] No defects or bloat detected.{COLOR_RESET}")
         print(f"{COLOR_GREEN}Quality gate passed successfully.{COLOR_RESET}\n")
@@ -84,11 +88,13 @@ def print_colored_report(report: ConsolidatedReport, verified_findings: List[Fin
             if risk.risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
             else (COLOR_YELLOW if risk.risk_level == RiskLevel.MEDIUM else COLOR_GREEN)
         )
-        print(f"  {COLOR_BOLD}PR Risk Level           : {risk_color}{risk.risk_level.value}{COLOR_RESET}")
-        print(f"  {COLOR_GRAY}Complexity Delta        : {risk.cyclomatic_complexity} branches{COLOR_RESET}")
+        print(f"  {COLOR_BOLD}PR Review effort        : {risk_color}{risk.risk_level.value}{COLOR_RESET}")
+        print(f"  {COLOR_GRAY}Changed-scope complexity sum        : {risk.cyclomatic_complexity} (scope scores){COLOR_RESET}")
         print(f"  {COLOR_GRAY}Perimeter Exposed       : {risk.perimeter_symbols_count} public symbols{COLOR_RESET}")
         test_color = COLOR_GREEN if risk.has_test_coverage else COLOR_RED
-        print(f"  {COLOR_GRAY}Tests Included          : {test_color}{'Yes' if risk.has_test_coverage else 'No'}{COLOR_RESET}")
+        print(f"  {COLOR_GRAY}Test files changed      : {test_color}{'Yes' if risk.has_test_coverage else 'No'}{COLOR_RESET}")
+
+    print("  Measured test coverage  : unavailable")
 
     print("\nDetailed Findings:")
     print("-" * 65)

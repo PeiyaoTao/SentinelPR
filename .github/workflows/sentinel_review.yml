@@ -9,33 +9,88 @@ permissions:
   pull-requests: write
   issues: write
 
+concurrency:
+  group: sentinel-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   review:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Check out repository
+      # Reviewer code and its dependencies come from the trusted base revision.
+      # The PR checkout is data only; tests/builds run in offline containers.
+      - name: Check out trusted reviewer
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: reviewer
+          persist-credentials: false
 
-      - name: Set up Python 3.11
+      - name: Check out exact PR revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install SentinelPR
+      - name: Install trusted reviewer
         run: |
-          pip install -e .
+          if [ -f "reviewer/requirements-audit.txt" ]; then
+            echo "Installing reviewer from trusted base revision..."
+            python -m pip install -r reviewer/requirements-audit.txt
+            python -m pip install --no-deps ./reviewer
+          elif [ -f "target/requirements-audit.txt" ]; then
+            echo "Base branch missing requirements-audit.txt (bootstrap rollout); installing from target PR revision..."
+            python -m pip install -r target/requirements-audit.txt
+            python -m pip install --no-deps ./target
+          else
+            echo "No requirements-audit.txt found; installing base reviewer..."
+            python -m pip install --no-deps ./reviewer
+          fi
 
-      - name: Run SentinelPR Automated Review
+      - name: Prepare trusted offline check environment
+        run: |
+          if [ -f "reviewer/Dockerfile.checks" ]; then
+            docker build -f reviewer/Dockerfile.checks -t sentinel-checks:local reviewer
+          elif [ -f "target/Dockerfile.checks" ]; then
+            echo "Base branch missing Dockerfile.checks (bootstrap rollout); building from target PR revision..."
+            docker build -f target/Dockerfile.checks -t sentinel-checks:local target
+          else
+            echo "No Dockerfile.checks found; skipping container check image build."
+          fi
+
+      - name: Run review and project validation
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTINEL_TARGET_PATH: target
+          SENTINEL_REPORT_DIR: sentinel-artifacts
+          SENTINEL_CHECKS: all
+          SENTINEL_CHECK_IMAGE: sentinel-checks:local
+          SENTINEL_PUBLISH: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
           SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
-          SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || secrets.SENTINEL_BASE_URL || '' }}
-          FAST_MODEL: ${{ vars.FAST_MODEL || secrets.FAST_MODEL || '' }}
-          FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || secrets.FRONTIER_MODEL || '' }}
+          SENTINEL_LLM_CRITIC: ${{ vars.SENTINEL_LLM_CRITIC || 'true' }}
+          SENTINEL_LLM_QUALITY: ${{ vars.SENTINEL_LLM_QUALITY || 'true' }}
+          SENTINEL_QUALITY_MAX_GROUPS: ${{ vars.SENTINEL_QUALITY_MAX_GROUPS || '5' }}
+          SENTINEL_QUALITY_CONTEXT_CHARS: ${{ vars.SENTINEL_QUALITY_CONTEXT_CHARS || '18000' }}
+          SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || '' }}
+          FAST_MODEL: ${{ vars.FAST_MODEL || '' }}
+          FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || '' }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python -m sentinel.github
+        run: python -m sentinel.github
+
+      - name: Archive review artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-pr-review
+          path: sentinel-artifacts/
+          if-no-files-found: warn

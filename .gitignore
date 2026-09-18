@@ -10,3 +10,7 @@ build/
 .venv/
 env/
 venv/
+
+.mypy_cache/
+.ruff_cache/
+sentinel-artifacts/
