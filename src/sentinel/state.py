@@ -44,12 +44,12 @@ class RiskLevel(str, Enum):
 
 
 class RiskAssessment(BaseModel):
-    """Assessment of overall pull request risk, blast radius, and test coverage."""
+    """Heuristic review effort, blast radius, and changed-test-file presence."""
     risk_level: RiskLevel = RiskLevel.LOW
     cyclomatic_complexity: int = 0
     total_churn_lines: int = 0
     perimeter_symbols_count: int = 0
-    has_test_coverage: bool = True
+    has_test_coverage: bool = Field(default=True, description="Legacy field: whether a test file changed; not measured coverage.")
     summary: str = ""
 
 

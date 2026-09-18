@@ -175,7 +175,11 @@ def container_check(name: CheckName, root: Path, image: str, timeout: int, requi
     except subprocess.TimeoutExpired:
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=30)
         return CheckResult(name=name, status="incomplete", summary="Check timed out; disposable container removed.")
-    code = proc.returncode
+    return classify_container_result(name, proc.returncode, raw)
+
+
+def classify_container_result(name: CheckName, code: int, raw: bytes) -> CheckResult:
+    """Interpret status independently of transport; never expose raw logs."""
     text = raw.decode("utf-8", errors="replace")
     if code != 0 and text.lstrip().lower().startswith(("failed to connect to the docker api", "docker: error during connect", "error during connect", "cannot connect to the docker daemon")):
         return CheckResult(name=name, status="incomplete", summary="Docker engine is unavailable; no target check ran and no host fallback was used.")
@@ -188,24 +192,7 @@ def container_check(name: CheckName, root: Path, image: str, timeout: int, requi
     if code == 0:
         return CheckResult(name=name, status="passed", summary="Tool completed successfully in an offline container.")
     if name in ("lint", "types") and code == 1:
-        issues = []
-        if name == "lint" and len(raw) <= 1_000_000:
-            try:
-                diagnostics = json.loads(text)
-                for item in diagnostics:
-                    # Only retain code/location; messages may embed secrets.
-                    rule = item.get("code") or "syntax"
-                    file = PurePosixPath(item["filename"]).relative_to("/tmp/project").as_posix()
-                    issues.append(CheckIssue(rule=str(rule), message="Lint violation; run Ruff locally for details.", path=file, line=int(item["location"]["row"])))
-            except (ValueError, TypeError, KeyError, AttributeError):
-                return CheckResult(name=name, status="error", summary="Linter returned malformed diagnostics.")
-        if name == "types":
-            for match in re.finditer(r"^(.+?):(\d+)(?::\d+)?: error: .*?\[([a-z-]+)\]$", text, re.MULTILINE):
-                file, line, rule = match.groups()
-                file = file.removeprefix("/tmp/project/")
-                if not PurePosixPath(file).is_absolute() and ".." not in PurePosixPath(file).parts:
-                    issues.append(CheckIssue(rule=rule, message="Type-checking diagnostic; run mypy locally for details.", path=file, line=int(line)))
-        return CheckResult(name=name, status="failed", summary="Tool reported code diagnostics. Run the tool locally for details; raw output is withheld to protect credentials.", issues=issues)
+        return parse_code_diagnostics(name, raw, text)
     if name == "tests" and code == 1:
         return CheckResult(name=name, status="failed", summary="The project test suite reported failures. Raw test output is withheld to protect credentials.")
     if name == "tests" and code in (2, 3, 4, 5):
@@ -214,6 +201,28 @@ def container_check(name: CheckName, root: Path, image: str, timeout: int, requi
         return CheckResult(name=name, status="failed", summary="The project failed to build an sdist and wheel in the prepared environment.")
     return CheckResult(name=name, status="error", summary=f"Tool could not complete (exit {code}); check tool configuration and the prepared image.")
 
+
+
+def parse_code_diagnostics(name: CheckName, raw: bytes, text: str) -> CheckResult:
+    """Export tool codes and locations only."""
+    issues = []
+    if name == "lint" and len(raw) <= 1_000_000:
+        try:
+            diagnostics = json.loads(text)
+            for item in diagnostics:
+                # Only retain code/location; messages may embed secrets.
+                rule = item.get("code") or "syntax"
+                file = PurePosixPath(item["filename"]).relative_to("/tmp/project").as_posix()
+                issues.append(CheckIssue(rule=str(rule), message="Lint violation; run Ruff locally for details.", path=file, line=int(item["location"]["row"])))
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return CheckResult(name=name, status="error", summary="Linter returned malformed diagnostics.")
+    if name == "types":
+        for match in re.finditer(r"^(.+?):(\d+)(?::\d+)?: error: .*?\[([a-z-]+)\]$", text, re.MULTILINE):
+            file, line, rule = match.groups()
+            file = file.removeprefix("/tmp/project/")
+            if not PurePosixPath(file).is_absolute() and ".." not in PurePosixPath(file).parts:
+                issues.append(CheckIssue(rule=rule, message="Type-checking diagnostic; run mypy locally for details.", path=file, line=int(line)))
+    return CheckResult(name=name, status="failed", summary="Tool reported code diagnostics. Run the tool locally for details; raw output is withheld to protect credentials.", issues=issues)
 
 def audit_dependencies(root: Path, requirements: str, timeout: int) -> CheckResult:
     """Audit exact pins only; never resolve/install dependencies or execute metadata.

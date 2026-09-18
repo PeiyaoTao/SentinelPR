@@ -88,10 +88,8 @@ def evaluate_pr_risk(
     perimeter_symbols = [s for s in symbols if s.trust_zone == TrustZone.PERIMETER]
     perimeter_count = len(perimeter_symbols)
 
-    # 4. Determine overall PR Risk Level
-    if total_churn > 500 or (perimeter_count > 0 and not has_test_coverage and total_complexity > 10):
-        risk_level = RiskLevel.CRITICAL
-    elif (perimeter_count > 0 and not has_test_coverage) or (total_complexity > 10 and not has_test_coverage):
+    # 4. Determine overall PR Review effort
+    if total_churn > 500 or (perimeter_count > 0 and not has_test_coverage) or (total_complexity > 10 and not has_test_coverage):
         risk_level = RiskLevel.HIGH
     elif total_complexity > 5 or total_churn > 150:
         risk_level = RiskLevel.MEDIUM
@@ -114,10 +112,10 @@ def evaluate_pr_risk(
         )
 
     summary_text = (
-        f"PR Risk: {risk_level.value} (Churn: {total_churn} lines, "
-        f"Complexity Delta: {total_complexity}, "
+        f"PR review effort: {risk_level.value} (Churn: {total_churn} lines, "
+        f"Changed-scope complexity sum: {total_complexity}, "
         f"Perimeter Exposed: {perimeter_count}, "
-        f"Tests Included: {'Yes' if has_test_coverage else 'No'})"
+        f"Test files changed: {'Yes' if has_test_coverage else 'No'})"
     )
 
     assessment = RiskAssessment(

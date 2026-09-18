@@ -34,7 +34,7 @@ def repository_consolidator_node(state: PRReviewState) -> dict:
     if not inventory.analyzed_files:
         lines += ["**Incomplete code review:** No Python files were available for analysis.", ""]
     if assessment.llm_summary:
-        lines += ["## Model assessment (advisory)", "", assessment.llm_summary, ""]
+        lines += ["## Model assessment (static context only; excludes executable validation)", "", assessment.llm_summary, ""]
     lines += ["## Strengths", ""]
     lines += [f"- {item}" for item in assessment.strengths] or ["No structural strengths identified by the available checks."]
     lines += ["", "## Code findings", ""]
@@ -82,4 +82,6 @@ def repository_consolidator_node(state: PRReviewState) -> dict:
         uninspected_files=list(inventory.uninspected_files), repository_inventory=inventory,
         project_assessment=assessment,
     )
+    from sentinel.checks.report import refresh_executive_summary
+    refresh_executive_summary(report)
     return {"consolidated_report": report, "review_outcome": outcome, "verified_findings": findings}

@@ -562,3 +562,21 @@ SentinelPR/
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+### Interpreting review reports
+
+The executive summary uses recorded findings and validation results. Each selected check is
+reported as passed, failed, incomplete, or error; unrun checks are not claimed as passing.
+Measured test coverage is currently unavailable. "Test files changed" only identifies test
+file changes. Legacy JSON fields `has_test_coverage` and `risk_level` remain compatible;
+they represent test-file presence and heuristic review effort, respectively.
+
+Large changes increase review effort, without implying a critical defect. The changed-scope
+complexity sum is neither a base/head delta nor a count of unique branches: nested scopes can
+overlap. Same-symbol complexity, nesting, and length observations share an advisory entry.
+The report suggests three starting points and keeps the full evidence in a collapsible inventory;
+SARIF and JSON retain all individual findings. Unresolved calls describe analyzer limitations.
+
+PR executive summaries are now deterministic so completed validation cannot be contradicted by
+an earlier model summary. Optional per-finding LLM criticism remains enabled according to the
+existing configuration; repository model assessments remain explicitly limited to static context.

@@ -118,6 +118,39 @@ def _valid_concurrency_source(finding: Finding, state: PRReviewState) -> bool:
     return any(node.lineno == finding.start_line for node, _ in global_mutations(tree))
 
 
+
+def apply_model_decision(finding: Finding, decision: ModelDecision, limitations: list[str]) -> bool:
+    """Apply contextual opinion without overriding verified blocking evidence."""
+    proven_blocker = finding.severity in (Severity.HIGH, Severity.CRITICAL) and finding.proof_status in PROVEN
+    if decision.decision != "ACCEPT" and proven_blocker:
+        limitations.append("LLM challenged a verified blocking finding; retained pending independent adjudication.")
+    elif decision.decision == "REJECT":
+        return False
+    elif decision.decision == "DOWNGRADE":
+        finding.critic_decision = CriticDecision.DOWNGRADE
+        if finding.severity in (Severity.HIGH, Severity.CRITICAL, Severity.MEDIUM):
+            finding.severity = Severity.LOW
+    assert finding.critic_reasoning is not None
+    finding.critic_reasoning += f" LLM {decision.decision}: {decision.reason} (contextual opinion, not proof)."
+    return True
+
+
+
+def contextual_review(finding: Finding, state: PRReviewState, index: RepositoryIndex,
+                      limitations: list[str]) -> tuple[bool, bool]:
+    """Return (retain finding, model call attempted) after checking source availability."""
+    excerpts = critic_context(finding, state, index)
+    if not any(e["file_path"] == finding.file_path and e["start_line"] <= finding.start_line <= e["end_line"] for e in excerpts):
+        limitations.append("LLM critic skipped a finding whose source was unavailable within the context budget.")
+        return True, False
+    try:
+        decision = consult_llm_critic(finding, excerpts)
+    except (ValueError, RuntimeError, KeyError, TypeError, IndexError) as error:
+        limitations.append(f"LLM critic unavailable or invalid response ({type(error).__name__}); deterministic evidence retained.")
+        return True, True
+    return apply_model_decision(finding, decision, limitations), True
+
+
 def critic_agent_node(state: PRReviewState) -> Dict[str, Any]:
     """Shared PR/repository critic: structural gate, bounded model review, evidence ceiling."""
     retained: List[Finding] = []
@@ -145,28 +178,10 @@ def critic_agent_node(state: PRReviewState) -> Dict[str, Any]:
             else:
                 if index is None:
                     index = RepositoryIndex(state.get("head_files", {}))
-                excerpts = critic_context(finding, state, index)
-                if not excerpts or not any(e["file_path"] == finding.file_path and e["start_line"] <= finding.start_line <= e["end_line"] for e in excerpts):
-                    limitations.append("LLM critic skipped a finding whose source was unavailable within the context budget.")
-                else:
-                    calls += 1
-                    try:
-                        decision = consult_llm_critic(finding, excerpts)
-                    except (ValueError, RuntimeError, KeyError, TypeError, IndexError) as error:
-                        limitations.append(f"LLM critic unavailable or invalid response ({type(error).__name__}); deterministic evidence retained.")
-                    else:
-                        # Verified blocking evidence requires independent adjudication of model disagreement.
-                        proven_blocker = finding.severity in (Severity.HIGH, Severity.CRITICAL) and finding.proof_status in PROVEN
-                        if decision.decision != "ACCEPT" and proven_blocker:
-                            limitations.append("LLM challenged a verified blocking finding; retained pending independent adjudication.")
-                        elif decision.decision == "REJECT":
-                            continue
-                        elif decision.decision == "DOWNGRADE":
-                            finding.critic_decision = CriticDecision.DOWNGRADE
-                            if finding.severity in (Severity.HIGH, Severity.CRITICAL, Severity.MEDIUM):
-                                finding.severity = Severity.LOW
-                        assert finding.critic_reasoning is not None
-                        finding.critic_reasoning += f" LLM {decision.decision}: {decision.reason} (contextual opinion, not proof)."
+                keep, called = contextual_review(finding, state, index, limitations)
+                calls += int(called)
+                if not keep:
+                    continue
         retained.append(finding)
     if enabled:
         limitations.append(f"Optional LLM critic: {calls} call(s); bounded source excerpts and conservative call resolution, not exhaustive concurrency analysis.")
