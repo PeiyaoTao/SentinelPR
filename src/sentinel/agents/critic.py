@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sentinel.config import default_config
 from sentinel.llm import get_llm_client
 from sentinel.quality.index import RepositoryIndex
-from sentinel.state import CriticDecision, Finding, FindingCategory, PRReviewState, ProofStatus, Severity, TrustZone
+from sentinel.state import CriticAudit, CriticCitation, CriticDecision, Finding, FindingCategory, PRReviewState, ProofStatus, Severity, TrustZone
 
 PROVEN = {ProofStatus.STATIC_VERIFIED, ProofStatus.REPRODUCED_DYNAMICALLY}
 
@@ -137,55 +137,89 @@ def apply_model_decision(finding: Finding, decision: ModelDecision, limitations:
 
 
 def contextual_review(finding: Finding, state: PRReviewState, index: RepositoryIndex,
-                      limitations: list[str]) -> tuple[bool, bool]:
+                      limitations: list[str], audit: CriticAudit) -> tuple[bool, bool]:
     """Return (retain finding, model call attempted) after checking source availability."""
     excerpts = critic_context(finding, state, index)
     if not any(e["file_path"] == finding.file_path and e["start_line"] <= finding.start_line <= e["end_line"] for e in excerpts):
+        audit.model_status = "source_unavailable"
         limitations.append("LLM critic skipped a finding whose source was unavailable within the context budget.")
         return True, False
+    audit.model = default_config.frontier_model
+    audit.context_hashes = {e["file_path"]: index.hashes[e["file_path"]] for e in excerpts}
     try:
         decision = consult_llm_critic(finding, excerpts)
     except (ValueError, RuntimeError, KeyError, TypeError, IndexError) as error:
+        audit.model_status = "unavailable"
         limitations.append(f"LLM critic unavailable or invalid response ({type(error).__name__}); deterministic evidence retained.")
         return True, True
-    return apply_model_decision(finding, decision, limitations), True
+    audit.model_status = "reviewed"
+    audit.model_decision = decision.decision
+    audit.model_reason = decision.reason
+    audit.citations = [CriticCitation(file_path=c.file_path, line=c.line, source_hash=index.hashes[c.file_path]) for c in decision.evidence]
+    keep = apply_model_decision(finding, decision, limitations)
+    if not keep:
+        finding.critic_decision = CriticDecision.REJECT
+        finding.critic_reasoning = "Rejected by contextual model opinion: " + decision.reason
+    return keep, True
+
+
+
+def record_evidence_decision(audit: CriticAudit, finding: Finding) -> None:
+    audit.decision = finding.critic_decision.value
+    audit.reason = finding.critic_reasoning or "No critic reasoning recorded."
+    audit.final_severity = finding.severity
 
 
 def critic_agent_node(state: PRReviewState) -> Dict[str, Any]:
     """Shared PR/repository critic: structural gate, bounded model review, evidence ceiling."""
     retained: List[Finding] = []
     limitations: list[str] = []
+    audit_log: list[CriticAudit] = []
     seen = set()
     calls = 0
     enabled = default_config.provider != "heuristics" and default_config.llm_critic_enabled
     index = state.get("quality_index")
     for candidate in state.get("candidate_findings", []):
+        audit = CriticAudit(finding_id=candidate.id, rule_id=candidate.rule_id or candidate.category.value,
+                            title=candidate.title, claim=candidate.explanation, file_path=candidate.file_path, line=candidate.start_line,
+                            original_severity=candidate.severity, final_severity=candidate.severity,
+                            proof_status=candidate.proof_status)
+        audit_log.append(audit)
         key = (candidate.file_path, candidate.start_line, candidate.category, candidate.rule_id or candidate.title)
         if key in seen:
+            audit.decision = "DUPLICATE"
+            audit.reason = "Same location, category, and rule/title as an earlier candidate."
             continue
         seen.add(key)
         finding = candidate.model_copy(deep=True)
         if finding.rule_id == "logic.global-mutation":
             if not _valid_concurrency_source(finding, state):
+                audit.decision = "REJECT"
+                audit.reason = "No matching global mutation operation at the cited source line."
                 continue  # No actual operation at the cited line: reject before any LLM call.
             finding.hypothesis = True
         finding = evaluate_candidate_finding(finding)
+        record_evidence_decision(audit, finding)
+        audit.deterministic_decision = audit.decision
+        audit.deterministic_reason = audit.reason
         if finding.critic_decision == CriticDecision.REJECT:
             continue  # A model cannot override mandatory boundary or structural rejection.
         if enabled:
             if calls >= default_config.llm_critic_max_findings:
+                audit.model_status = "budget_exhausted"
                 limitations.append("LLM critic finding budget exhausted; remaining decisions use deterministic evidence only.")
             else:
                 if index is None:
                     index = RepositoryIndex(state.get("head_files", {}))
-                keep, called = contextual_review(finding, state, index, limitations)
+                keep, called = contextual_review(finding, state, index, limitations, audit)
                 calls += int(called)
+                record_evidence_decision(audit, finding)
                 if not keep:
                     continue
         retained.append(finding)
     if enabled:
         limitations.append(f"Optional LLM critic: {calls} call(s); bounded source excerpts and conservative call resolution, not exhaustive concurrency analysis.")
-    result: Dict[str, Any] = {"verified_findings": retained, "critic_limitations": list(dict.fromkeys(limitations))}
+    result: Dict[str, Any] = {"verified_findings": retained, "critic_audit": audit_log, "critic_limitations": list(dict.fromkeys(limitations))}
     if index is not None:
         result["quality_index"] = index
     return result

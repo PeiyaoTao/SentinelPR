@@ -158,6 +158,7 @@ def main():
     parser.add_argument("--check-timeout", type=int, default=300, help="Timeout in seconds per validation tool")
     parser.add_argument("--requirements", default="requirements-audit.txt", help="Pinned audit requirements path relative to the repository")
     parser.add_argument("--no-llm-critic", action="store_true", help="Disable optional contextual model criticism; keep deterministic evidence checks")
+    parser.add_argument("--no-llm-quality", action="store_true", help="Disable contextual quality advice; preserve static quality observations")
     args = parser.parse_args()
     from sentinel.checks.models import CHECK_NAMES
     selected_checks = list(CHECK_NAMES) if args.checks == "all" else (args.checks.split(",") if args.checks else [])
@@ -168,6 +169,8 @@ def main():
     if (args.baseline or args.save_baseline) and args.repo is None:
         parser.error("Quality baselines require --repo")
 
+    if args.no_llm_quality:
+        default_config.llm_quality_enabled = False
     if args.no_llm_critic:
         default_config.llm_critic_enabled = False
 

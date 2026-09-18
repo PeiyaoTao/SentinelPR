@@ -74,6 +74,7 @@ def repository_consolidator_node(state: PRReviewState) -> dict:
         lines += [f"- `{p}`: {reason}" for p, reason in inventory.excluded_files.items()]
         lines += ["", "</details>"]
     report = ConsolidatedReport(
+        critic_audit=state.get("critic_audit", []),
         critic_limitations=state.get("critic_limitations", []),
         quality_review=state.get("quality_review"),
         summary_markdown="\n".join(lines) + "\n\n" + render_quality(state.get("quality_review")), review_outcome=outcome,
@@ -83,5 +84,8 @@ def repository_consolidator_node(state: PRReviewState) -> dict:
         project_assessment=assessment,
     )
     from sentinel.checks.report import refresh_executive_summary
+    from sentinel.critic_report import render_critic_audit
+    report.summary_markdown += render_critic_audit(report.critic_audit)
+    report.sarif_json["runs"][0].setdefault("properties", {})["criticAudit"] = [entry.model_dump(mode="json") for entry in report.critic_audit]
     refresh_executive_summary(report)
     return {"consolidated_report": report, "review_outcome": outcome, "verified_findings": findings}

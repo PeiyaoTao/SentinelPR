@@ -76,6 +76,9 @@ jobs:
           SENTINEL_PUBLISH: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
           SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
           SENTINEL_LLM_CRITIC: ${{ vars.SENTINEL_LLM_CRITIC || 'true' }}
+          SENTINEL_LLM_QUALITY: ${{ vars.SENTINEL_LLM_QUALITY || 'true' }}
+          SENTINEL_QUALITY_MAX_GROUPS: ${{ vars.SENTINEL_QUALITY_MAX_GROUPS || '5' }}
+          SENTINEL_QUALITY_CONTEXT_CHARS: ${{ vars.SENTINEL_QUALITY_CONTEXT_CHARS || '18000' }}
           SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || '' }}
           FAST_MODEL: ${{ vars.FAST_MODEL || '' }}
           FRONTIER_MODEL: ${{ vars.FRONTIER_MODEL || '' }}

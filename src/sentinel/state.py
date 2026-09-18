@@ -150,6 +150,35 @@ class Finding(BaseModel):
     critic_reasoning: Optional[str] = None
 
 
+class CriticCitation(BaseModel):
+    file_path: str
+    line: int = Field(ge=1)
+    source_hash: str
+
+
+class CriticAudit(BaseModel):
+    """One record per candidate, including discarded and duplicate candidates."""
+    finding_id: str
+    rule_id: str
+    title: str
+    file_path: str
+    line: int
+    claim: str
+    deterministic_decision: Optional[str] = None
+    deterministic_reason: Optional[str] = None
+    original_severity: Severity
+    final_severity: Severity
+    proof_status: ProofStatus
+    decision: Literal["ACCEPT", "DOWNGRADE", "REJECT", "DUPLICATE"] = "ACCEPT"
+    reason: str = ""
+    model_status: Literal["not_requested", "budget_exhausted", "source_unavailable", "unavailable", "reviewed"] = "not_requested"
+    model: Optional[str] = None
+    model_decision: Optional[str] = None
+    model_reason: Optional[str] = None
+    citations: List[CriticCitation] = Field(default_factory=list)
+    context_hashes: Dict[str, str] = Field(default_factory=dict)
+
+
 class RepositoryInventory(BaseModel):
     """Coverage of a local working-directory snapshot; target code is never executed."""
     root: str
@@ -193,6 +222,7 @@ class ConsolidatedReport(BaseModel):
     uninspected_files: List[str] = Field(default_factory=list)
     repository_inventory: Optional[RepositoryInventory] = None
     project_assessment: Optional[ProjectAssessment] = None
+    critic_audit: List[CriticAudit] = Field(default_factory=list)
     critic_limitations: List[str] = Field(default_factory=list)
     quality_review: Optional[QualityReview] = None
     validation: Optional[ValidationReport] = None
@@ -221,6 +251,7 @@ class PRReviewState(TypedDict, total=False):
     repository_inventory: RepositoryInventory
     project_assessment: ProjectAssessment
 
+    critic_audit: List[CriticAudit]
     critic_limitations: List[str]
     quality_index: Any
     quality_review: QualityReview

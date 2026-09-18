@@ -242,6 +242,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
     sarif = append_quality_sarif(generate_sarif(verified_findings), state.get("quality_review"))
 
     report = ConsolidatedReport(
+        critic_audit=state.get("critic_audit", []),
         critic_limitations=state.get("critic_limitations", []),
         quality_review=state.get("quality_review"),
         summary_markdown=summary_markdown,
@@ -258,5 +259,8 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
     )
 
     from sentinel.checks.report import refresh_executive_summary
+    from sentinel.critic_report import render_critic_audit
+    report.summary_markdown += render_critic_audit(report.critic_audit)
+    report.sarif_json["runs"][0].setdefault("properties", {})["criticAudit"] = [entry.model_dump(mode="json") for entry in report.critic_audit]
     refresh_executive_summary(report)
     return {"consolidated_report": report, "review_outcome": review_outcome}

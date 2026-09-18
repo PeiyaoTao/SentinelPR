@@ -44,6 +44,11 @@ class SentinelConfig(BaseModel):
     llm_critic_max_findings: int = Field(default=8, ge=0)
     llm_critic_context_chars: int = Field(default=12000, ge=1000)
 
+    # Contextual advice has a separate budget and never changes code verdicts.
+    llm_quality_enabled: bool = True
+    llm_quality_max_groups: int = Field(default=5, ge=0)
+    llm_quality_context_chars: int = Field(default=18000, ge=1000)
+
     # Token & PR Budgets
     max_pr_churn_lines: int = Field(
         default=1500,
@@ -149,6 +154,18 @@ def load_config_from_env() -> SentinelConfig:
         if critic_setting.lower() not in {"true", "false"}:
             raise ValueError("SENTINEL_LLM_CRITIC must be true or false")
         cfg.llm_critic_enabled = critic_setting.lower() == "true"
+
+    quality_setting = os.getenv("SENTINEL_LLM_QUALITY")
+    if quality_setting is not None:
+        if quality_setting.lower() not in {"true", "false"}:
+            raise ValueError("SENTINEL_LLM_QUALITY must be true or false")
+        cfg.llm_quality_enabled = quality_setting.lower() == "true"
+    for env, field in (("SENTINEL_QUALITY_MAX_GROUPS", "llm_quality_max_groups"),
+                       ("SENTINEL_QUALITY_CONTEXT_CHARS", "llm_quality_context_chars")):
+        if env in os.environ:
+            values = cfg.model_dump()
+            values[field] = int(os.environ[env])
+            cfg = SentinelConfig.model_validate(values)
 
     # Explicit environment overrides always take precedence
     if os.getenv("SENTINEL_API_KEY"):

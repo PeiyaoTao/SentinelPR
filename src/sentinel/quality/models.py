@@ -1,7 +1,7 @@
 """Structured advisory findings; confidence never substitutes for evidence."""
 
 from typing import Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Category = Literal["architecture", "redundancy", "performance", "readability", "maintainability", "security"]
 
@@ -49,6 +49,45 @@ class BaselineComparison(BaseModel):
     unassessed: list[str] = Field(default_factory=list)
 
 
+class AdviceCitation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file_path: str
+    line: int = Field(ge=1)
+
+
+class AdviceDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    disposition: Literal["recommend", "keep", "inconclusive"]
+    rationale: str = Field(min_length=1, max_length=2000)
+    recommendation: str = Field(default="", max_length=2000)
+    impact: Literal["high", "medium", "low"] = "low"
+    impact_reason: str = Field(default="", max_length=1000)
+    benefit: Literal["high", "medium", "low"] = "low"
+    benefit_reason: str = Field(default="", max_length=1000)
+    confidence: Literal["high", "medium", "low"] = "low"
+    evidence: list[AdviceCitation] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def actionable(self):
+        if self.disposition == "recommend" and not all(x.strip() for x in (self.recommendation, self.impact_reason, self.benefit_reason)):
+            raise ValueError("Recommendations require a specific action and impact/benefit reasons")
+        if self.disposition != "recommend" and self.recommendation:
+            raise ValueError("Only recommend decisions may prescribe a change")
+        return self
+
+
+class ContextualAdvice(BaseModel):
+    fingerprints: list[str]
+    subject: str
+    status: Literal["reviewed", "unavailable", "insufficient_context", "budget_exhausted"]
+    decision: AdviceDecision | None = None
+    model: str | None = None
+    context_hashes: dict[str, str] = Field(default_factory=dict)
+    context_ranges: list[SourceLocation] = Field(default_factory=list)
+    limitation: str = ""
+    selection_reason: str = ""
+
+
 class QualityReview(BaseModel):
     snapshot_id: str
     policy_id: str
@@ -59,3 +98,4 @@ class QualityReview(BaseModel):
     baseline: BaselineComparison | None = None
     unresolved_calls: int = 0
     complete: bool = True
+    contextual_advice: list[ContextualAdvice] = Field(default_factory=list)

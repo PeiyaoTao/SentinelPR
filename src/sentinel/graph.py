@@ -15,6 +15,7 @@ from sentinel.agents.test_synthesizer import test_synthesis_node
 from sentinel.agents.triage import triage_agent_node
 from sentinel.state import PRReviewState
 from sentinel.quality.pipeline import quality_review_node
+from sentinel.quality.contextual import contextual_quality_node
 
 
 def create_sentinel_graph():
@@ -25,6 +26,7 @@ def create_sentinel_graph():
             -> test_synthesizer (fan-in)
             -> critic
             -> quality (shared index and advisory specialists)
+            -> quality_context (bounded optional advice)
             -> consolidator
             -> END
     """
@@ -39,6 +41,7 @@ def create_sentinel_graph():
     builder.add_node("test_synthesizer", test_synthesis_node)
     builder.add_node("critic", critic_agent_node)
     builder.add_node("quality", quality_review_node)
+    builder.add_node("quality_context", contextual_quality_node)
     builder.add_node("consolidator", consolidator_agent_node)
 
     # Connect Edges
@@ -59,7 +62,8 @@ def create_sentinel_graph():
     # Pipeline Continuation
     builder.add_edge("test_synthesizer", "critic")
     builder.add_edge("critic", "quality")
-    builder.add_edge("quality", "consolidator")
+    builder.add_edge("quality", "quality_context")
+    builder.add_edge("quality_context", "consolidator")
     builder.add_edge("consolidator", END)
 
     return builder.compile()
@@ -106,7 +110,7 @@ def review_repository(path=".", baseline_path=None) -> Dict[str, Any]:
 
     Reads a bounded working-directory snapshot, respecting Git ignores when available.
     Performs static review only: no project imports, builds, tests, or generated execution.
-    The configured provider optionally supplies one bounded, advisory model assessment.
+    The configured provider optionally supplies bounded quality advice and a project assessment.
     baseline_path optionally compares quality findings against a policy-bound baseline.
     """
     from sentinel.agents.project import project_agent_node, repository_critic_node
@@ -129,6 +133,7 @@ def review_repository(path=".", baseline_path=None) -> Dict[str, Any]:
     builder.add_node("anti_bloat", anti_bloat_agent_node)
     builder.add_node("critic", repository_critic_node)
     builder.add_node("quality", quality_review_node)
+    builder.add_node("quality_context", contextual_quality_node)
     builder.add_node("project", project_agent_node)
     builder.add_node("report", repository_consolidator_node)
     builder.add_edge(START, "triage")
@@ -136,7 +141,8 @@ def review_repository(path=".", baseline_path=None) -> Dict[str, Any]:
         builder.add_edge("triage", name)
     builder.add_edge(["logic", "security", "anti_bloat"], "critic")
     builder.add_edge("critic", "quality")
-    builder.add_edge("quality", "project")
+    builder.add_edge("quality", "quality_context")
+    builder.add_edge("quality_context", "project")
     builder.add_edge("project", "report")
     builder.add_edge("report", END)
     return builder.compile().invoke(initial_state)

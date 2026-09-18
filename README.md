@@ -266,8 +266,8 @@ default_config.llm_critic_max_findings = 8
 default_config.llm_critic_context_chars = 12000
 ```
 
-The default allows up to eight critic calls per review, plus the existing project
-assessment/summary call. The character budget applies to serialized source excerpts;
+The default allows up to eight critic calls and five contextual quality calls per review,
+plus one project assessment call in repository mode. PR executive summaries are deterministic. The character budget applies to serialized source excerpts;
 fixed instructions and candidate metadata are additional. Duplicate findings and
 structural rejections do not consume model calls. Unavailable models, invalid outputs,
 unavailable context, and exhausted budgets are disclosed in critic limitations, while
@@ -574,9 +574,65 @@ they represent test-file presence and heuristic review effort, respectively.
 Large changes increase review effort, without implying a critical defect. The changed-scope
 complexity sum is neither a base/head delta nor a count of unique branches: nested scopes can
 overlap. Same-symbol complexity, nesting, and length observations share an advisory entry.
-The report suggests three starting points and keeps the full evidence in a collapsible inventory;
+The report suggests up to three contextually evaluated actions, or labels static signals for inspection,
+and keeps the full evidence in a collapsible inventory;
 SARIF and JSON retain all individual findings. Unresolved calls describe analyzer limitations.
 
 PR executive summaries are now deterministic so completed validation cannot be contradicted by
 an earlier model summary. Optional per-finding LLM criticism remains enabled according to the
 existing configuration; repository model assessments remain explicitly limited to static context.
+
+### Auditable decisions and contextual quality advice
+
+Both PR and repository graphs now run `quality_context` after static quality analysis.
+The critic retains one audit record for every candidate, including rejections, duplicate
+suppression, downgrades, model failures, and verified findings challenged by a model.
+The report includes the original claim, deterministic disposition, model opinion, and
+cited source locations and hashes. JSON stores these under `critic_audit`; SARIF stores
+them as run metadata, so rejected claims do not become code-scanning findings.
+
+With a configured provider, up to five groups of quality observations receive contextual
+review through the frontier model. Selection uses rule priority, known importing/calling
+files, lifecycle, and overlapping signals. Full observed source must fit the context budget;
+related callers, callees, tests, and imported modules are included as space permits.
+Missing source, invalid responses, and exhausted budgets are disclosed. Static completeness
+continues to describe static analysis, not exhaustive contextual review.
+
+Each contextual decision is `recommend`, `keep`, or `inconclusive`. Recommendations need a
+specific action, cited rationale, and reasons for estimated impact and benefit. The suggested
+starting points rank validated recommendations by estimated impact, confidence, then benefit.
+These estimates are model opinions; citation validation proves only that the cited source was
+supplied. The model can still reason incorrectly. Keep/inconclusive decisions remain in the
+inventory and exports; static fingerprints and baselines are preserved. Static rule prompts
+are labeled as unassessed when contextual review did not establish an action.
+
+Configuration (environment variables apply in GitHub Actions too):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `SENTINEL_LLM_QUALITY` | `true` | Enable optional contextual quality advice; heuristics mode always stays offline |
+| `SENTINEL_QUALITY_MAX_GROUPS` | `5` | Maximum additional quality model calls per review; `0` disables calls |
+| `SENTINEL_QUALITY_CONTEXT_CHARS` | `18000` | Maximum serialized observation/excerpt payload per quality call |
+
+Use `--no-llm-quality` to disable this stage locally. `--no-llm-critic` controls the separate
+code-finding critic. The quality stage adds up to five calls to existing model work and never
+changes blocking outcomes. Actual test/build validation is reported separately after review.
+
+### Comparing advice models
+
+Four fixed, labeled fixtures cover necessary case handling, mandatory input validation,
+separable calculation/I/O, and unknown client contracts. Run them explicitly against each
+configured model, saving a separate output file:
+
+```powershell
+$env:SENTINEL_LLM_PROVIDER = 'deepseek'
+# Set FRONTIER_MODEL to the model you want to evaluate; use your existing credential setup.
+python -m sentinel.harness.quality_eval --live --output sentinel-artifacts/quality-model-a.json
+python -m sentinel.harness.quality_eval --responses sentinel-artifacts/quality-model-a.json --output sentinel-artifacts/quality-model-a-replay.json
+```
+
+Outputs include responses, citations, context hashes/ranges, model identity, and counts of
+reference matches, false recommendations, missed recommendations, and invalid/unavailable
+responses. Replay makes no model calls. These are small, subjective reference judgments,
+not a general model leaderboard. Inspect the recorded reasoning and specific actions when
+judging usefulness; retain the existing defect benchmark and reproduction tests separately.
