@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 from sentinel.quality.models import QualityReview
 from sentinel.checks.models import ValidationReport
+from sentinel.delegation_models import DelegatedReview
 
 
 class TrustZone(str, Enum):
@@ -227,6 +228,8 @@ class ConsolidatedReport(BaseModel):
     quality_review: Optional[QualityReview] = None
     validation: Optional[ValidationReport] = None
     llm_usage: List[Dict[str, Any]] = Field(default_factory=list)
+    delegated_review: Optional[DelegatedReview] = None
+    delegation_excerpts: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class PRReviewState(TypedDict, total=False):

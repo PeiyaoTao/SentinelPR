@@ -70,6 +70,8 @@ def run_github_auto_review():
     report.summary_markdown += f"\n\nReviewed commit `{head}` against merge base `{snapshot.merge_base}`.\n"
     output = Path(os.environ.get("SENTINEL_REPORT_DIR", "sentinel-artifacts"))
     output.mkdir(parents=True, exist_ok=True)
+    from sentinel.html_report import render_html
+    (output / "review.html").write_text(render_html(report), encoding="utf-8")
     (output / "review.md").write_text(report.summary_markdown, encoding="utf-8")
     (output / "review.sarif").write_text(json.dumps(report.sarif_json, indent=2), encoding="utf-8")
     (output / "review.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
