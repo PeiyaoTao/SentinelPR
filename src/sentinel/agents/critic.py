@@ -121,37 +121,47 @@ def _valid_concurrency_source(finding: Finding, state: PRReviewState) -> bool:
 
 
 def synthetic_secret_fixture(finding: Finding, state: PRReviewState) -> bool:
-    """Recognize embedded test-source assignments, never actual credential values."""
-    from sentinel.repository import is_test_file
+    """Recognize known dummy assignments inside source literals, regardless of path.
+
+    Actual assignments, unknown values and provider-shaped keys remain candidates.
+    A benchmark can embed a test that itself embeds scanner input.
+    """
     from sentinel.agents.security import SECRET_PATTERNS
-    if finding.title != "Hardcoded Credential/Secret" or not is_test_file(finding.file_path):
+    if finding.title != "Hardcoded Credential/Secret":
         return False
     try:
         tree = ast.parse(state.get("head_files", {}).get(finding.file_path, ""))
     except SyntaxError:
         return False
+    placeholders = {"abcdefghijklmnop1234", "exampleCredentialValue12345"}
+    fixtures = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
         if not node.lineno <= finding.start_line <= (node.end_lineno or node.lineno):
             continue
+        matches = list(SECRET_PATTERNS[0][0].finditer(node.value))
+        if not matches:
+            continue
         if SECRET_PATTERNS[1][0].search(node.value):
-            continue
+            return False
         try:
-            embedded = ast.parse(node.value)
+            ast.parse(node.value)
         except (SyntaxError, ValueError):
-            continue
-        dummy_assignments = [n for n in embedded.body if isinstance(n, (ast.Assign, ast.AnnAssign))
-                             and isinstance(n.value, ast.Constant)
-                             and n.value.value == "abcdefghijklmnop1234"]
-        if dummy_assignments and all("abcdefghijklmnop1234" in m.group() for m in SECRET_PATTERNS[0][0].finditer(node.value)):
-            actual = [n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign))
-                      and n.lineno == finding.start_line
-                      and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
-                      and n.value is not node]
-            if not actual:
-                return True
-    return False
+            return False
+        # Match values exactly, including nested source literals; do not trust
+        # filenames, explanatory comments, or the model's fixture claim.
+        if not all(m.group().split("=", 1)[1].strip()[1:-1] in placeholders for m in matches):
+            return False
+        fixtures.append(node)
+    if not fixtures:
+        return False
+    # Findings have line precision: a fixture must not hide another assignment
+    # on that same line, including a direct assignment of a known dummy value.
+    return not any(isinstance(n, (ast.Assign, ast.AnnAssign))
+                   and n.lineno <= finding.start_line <= (n.end_lineno or n.lineno)
+                   and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
+                   and n.value not in fixtures for n in ast.walk(tree))
 
 
 def apply_model_decision(finding: Finding, decision: ModelDecision, limitations: list[str]) -> bool:

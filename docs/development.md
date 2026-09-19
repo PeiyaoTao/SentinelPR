@@ -16,7 +16,7 @@ python -m build --no-isolation
 
 These developer commands execute directly in your environment. For validation of a target through the isolated runner, use the [validation guide](validation.md). Tests include platform-dependent skips; a skip is not a successful verification of that platform behavior.
 
-The synthetic defect benchmark has six labeled cases: mutable defaults, internal ghost checks, required perimeter validation, SQL injection, clean refactoring, and perimeter changes without changed test files.
+For precision/recall, clean counterexamples, known misses and timing, use the [behavior benchmark](benchmarking.md). The legacy synthetic smoke benchmark has six labeled cases: mutable defaults, internal ghost checks, required perimeter validation, SQL injection, clean refactoring, and perimeter changes without changed test files.
 
 ```sh
 python -m sentinel.harness.eval_suite

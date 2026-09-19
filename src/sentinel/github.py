@@ -70,9 +70,17 @@ def run_github_auto_review():
     report.summary_markdown += f"\n\nReviewed commit `{head}` against merge base `{snapshot.merge_base}`.\n"
     output = Path(os.environ.get("SENTINEL_REPORT_DIR", "sentinel-artifacts"))
     output.mkdir(parents=True, exist_ok=True)
+    from sentinel.html_report import render_html
+    (output / "review.html").write_text(render_html(report), encoding="utf-8")
     (output / "review.md").write_text(report.summary_markdown, encoding="utf-8")
     (output / "review.sarif").write_text(json.dumps(report.sarif_json, indent=2), encoding="utf-8")
     (output / "review.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    print(f"SentinelPR result: {report.review_outcome.value}; exit code {EXIT_CODES[report.review_outcome]}; "
+          f"retained findings={report.accepted_findings_count}; "
+          f"model calls incomplete={sum(c['status'] not in {'completed', 'cached'} for c in report.llm_usage)}", flush=True)
+    if report.validation:
+        print("SentinelPR validation: " + ", ".join(f"{c.name}={c.status}" for c in report.validation.results), flush=True)
+    print("Full report: " + str(output / "review.json"), flush=True)
     if not _current_revision(url, headers, head, base):
         print("PR revision changed or closed during analysis; report retained, publication skipped.")
         sys.exit(2)

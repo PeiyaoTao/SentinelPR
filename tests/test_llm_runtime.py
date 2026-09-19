@@ -36,7 +36,9 @@ def test_shared_output_budget_prevents_additional_transport(monkeypatch, budget)
     requests = []
     def run(*args, **kwargs):
         requests.append(json.loads(kwargs["input"]))
-        return SimpleNamespace(stdout=json.dumps(response()))
+        data = response()
+        data.pop("usage")
+        return SimpleNamespace(stdout=json.dumps(data))
     monkeypatch.setattr("sentinel.llm.subprocess.run", run)
     assert client().complete([]) == '{"ok": true}'
     with pytest.raises(RuntimeError, match="budget_exhausted"):
@@ -44,7 +46,7 @@ def test_shared_output_budget_prevents_additional_transport(monkeypatch, budget)
     assert len(requests) == 1
     assert requests[0]["payload"]["max_tokens"] == 100
     assert budget.incomplete
-    assert budget.calls[0]["usage"]["total_tokens"] == 120
+    assert budget.calls[0]["usage"] is None
     assert budget.calls[0]["stage"] == "critic"
 
 
@@ -142,3 +144,79 @@ def test_supplied_snapshot_change_invalidates_cache(monkeypatch, budget, tmp_pat
     set_review_snapshot({"caller.py": "new"})
     client().complete([])
     assert len(calls) == 2
+
+
+
+def test_truncated_response_keeps_usage_and_safe_reason(monkeypatch, budget, capsys):
+    monkeypatch.setattr("sentinel.llm.subprocess.run", lambda *a, **k: SimpleNamespace(stdout=json.dumps(response(content="private source", reason="length"))))
+    with pytest.raises(RuntimeError, match="finish_length"):
+        client().complete([])
+    assert budget.calls[0]["usage"]["total_tokens"] == 120
+    assert budget.calls[0]["error_code"] == "finish_length"
+    output = capsys.readouterr().out
+    assert "finish_length" in output
+    assert "private source" not in output
+
+
+@pytest.mark.parametrize("data,code", [
+    ({"transport_error": "HTTPError", "http_status": 429}, "http_429"),
+    ({"transport_error": "ReadTimeout"}, "ReadTimeout"),
+    ({"transport_error": "private provider body"}, "transport_error"),
+    ([], "invalid_response_shape"),
+])
+def test_safe_transport_failure_codes(monkeypatch, budget, capsys, data, code):
+    monkeypatch.setattr("sentinel.llm.subprocess.run", lambda *a, **k: SimpleNamespace(stdout=json.dumps(data)))
+    with pytest.raises(RuntimeError, match=code):
+        client().complete([])
+    assert budget.calls[0]["error_code"] == code
+    assert "private provider body" not in capsys.readouterr().out
+
+
+def test_worker_preserves_http_status_without_body(monkeypatch, capsys):
+    import io
+    import requests
+    from sentinel import llm_transport
+    response = requests.Response()
+    response.status_code = 429
+    response._content = b"private provider body"
+    def post(*args, **kwargs):
+        raise requests.HTTPError("sensitive URL", response=response)
+    monkeypatch.setattr(llm_transport.requests, "post", post)
+    monkeypatch.setattr(llm_transport.sys, "stdin", io.StringIO(json.dumps({"endpoint": "unused", "payload": {}, "headers": {}, "timeout": 1})))
+    llm_transport.main()
+    assert json.loads(capsys.readouterr().out) == {"transport_error": "HTTPError", "http_status": 429}
+
+
+
+def test_unused_output_reservation_available_to_quality(monkeypatch, budget):
+    calls = []
+    def run(*args, **kwargs):
+        calls.append(json.loads(kwargs["input"])["payload"]["max_tokens"])
+        return SimpleNamespace(stdout=json.dumps(response()))
+    monkeypatch.setattr("sentinel.llm.subprocess.run", run)
+    client().complete([])
+    assert budget.reserved_tokens == 20
+    quality = client()
+    quality.stage = "quality"
+    quality.complete([])
+    assert calls == [100, 80]
+    assert budget.reserved_tokens == 40
+    assert not budget.incomplete
+
+
+@pytest.mark.parametrize("usage,charged", [
+    ({"completion_tokens": 20}, 20),
+    ({"completion_tokens": 150}, 150),
+    ({"completion_tokens": -1}, 100),
+    ({"completion_tokens": True}, 100),
+    ({"completion_tokens": "20"}, 100),
+    ({}, 100),
+])
+def test_failed_content_settles_only_reliable_usage(monkeypatch, budget, usage, charged):
+    data = response(reason="length")
+    data["usage"] = usage
+    monkeypatch.setattr("sentinel.llm.subprocess.run", lambda *a, **k: SimpleNamespace(stdout=json.dumps(data)))
+    with pytest.raises(RuntimeError, match="finish_length"):
+        client().complete([])
+    assert budget.reserved_tokens == charged
+    assert budget.incomplete

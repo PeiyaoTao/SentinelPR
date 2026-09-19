@@ -49,7 +49,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          python -m sentinel.cli --repo . --checks all --markdown repo-review.md --sarif repo-review.sarif
+          python -m sentinel.cli --repo . --checks all --markdown repo-review.md --sarif repo-review.sarif --json repo-review.json --html repo-review.html
 
       - name: Publish Review to GitHub Job Summary
         if: always()
@@ -73,3 +73,5 @@ jobs:
           path: |
             repo-review.md
             repo-review.sarif
+            repo-review.json
+            repo-review.html

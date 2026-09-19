@@ -2,7 +2,7 @@
 
 Python code review for pull requests and whole repositories, with optional LLM advice and executable validation.
 
-SentinelPR combines deterministic code rules, an evidence gate, contextual model review, and Markdown/SARIF reports. It distinguishes blocking code findings from advisory design suggestions and records why candidates were retained or rejected.
+SentinelPR combines deterministic code rules, an evidence gate, contextual model review, and Markdown/JSON/SARIF/HTML reports. It distinguishes blocking code findings from advisory design suggestions and records why candidates were retained or rejected.
 
 ## What it does
 
@@ -10,6 +10,8 @@ SentinelPR combines deterministic code rules, an evidence gate, contextual model
 - Checks selected logic, security, defensive-code, architecture, redundancy, performance, readability, and maintainability patterns.
 - Uses optional LLM review to evaluate candidates and recommend a change, keep an implementation, or explain missing context.
 - Can run linting, type checking, tests, builds, dependency auditing, and secret scanning.
+- Exports offline HTML reports and review packets for your existing coding agent.
+- Includes a labelled offline benchmark with explicit false-positive and missed-defect metrics.
 - Supports automatic PR reviews and manual repository audits through GitHub Actions.
 
 Python is the supported code-analysis language. Checks have limited scope; a clean result does not establish that a project is defect-free or ready for production. See [report interpretation](docs/reports.md).
@@ -77,6 +79,8 @@ Use the maintained workflow files:
 | Configure automation and publication | [GitHub Actions](docs/github-actions.md) |
 | Understand findings, decisions, coverage, and exit codes | [Reports](docs/reports.md) |
 | Understand the pipeline and implemented rules | [Architecture](docs/architecture.md) |
+| Measure current detection behavior | [Benchmarking](docs/benchmarking.md) |
+| Review with an existing coding agent | [Delegation](docs/delegation.md) |
 | Develop, test, and compare advice models | [Development](docs/development.md) |
 
 The workflow files are the source of truth for YAML configuration. The guides explain their behavior rather than duplicating their contents.

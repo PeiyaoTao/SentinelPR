@@ -166,8 +166,8 @@ def slice_ast_symbols(file_path: str, full_code: str, changed_lines: Set[int]) -
                 symbol_name=file_path.split("/")[-1],
                 symbol_type="file",
                 file_path=file_path,
-                start_line=min(changed_lines) if changed_lines else 1,
-                end_line=max(changed_lines) if changed_lines else len(full_code.splitlines()),
+                start_line=1,
+                end_line=len(full_code.splitlines()),
                 code_snippet=full_code,
                 trust_zone=classify_trust_zone(file_path, full_code),
                 imports=[],
@@ -218,8 +218,8 @@ def slice_ast_symbols(file_path: str, full_code: str, changed_lines: Set[int]) -
     # Capture changed lines outside any function/class (e.g., top-level secrets, globals, statements)
     uncovered_changed_lines = changed_lines - covered_lines
     if uncovered_changed_lines:
-        start_line = min(uncovered_changed_lines)
-        end_line = max(uncovered_changed_lines)
+        start_line = max(1, min(uncovered_changed_lines) - 2)
+        end_line = min(len(lines), max(uncovered_changed_lines) + 3)
         symbols.append(
             ASTSymbolScope(
                 symbol_name="module_scope",
@@ -227,7 +227,7 @@ def slice_ast_symbols(file_path: str, full_code: str, changed_lines: Set[int]) -
                 file_path=file_path,
                 start_line=start_line,
                 end_line=end_line,
-                code_snippet="\n".join(lines[max(0, start_line - 3) : min(len(lines), end_line + 3)]),
+                code_snippet="\n".join(lines[start_line - 1 : end_line]),
                 trust_zone=classify_trust_zone(file_path, full_code),
                 imports=imports,
             )

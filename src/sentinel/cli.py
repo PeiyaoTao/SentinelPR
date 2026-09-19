@@ -92,9 +92,14 @@ def _outcome_exit_code(outcome: ReviewOutcome) -> int:
     }[outcome]
 
 
-def _export_report(report, markdown_path, sarif_path) -> None:
+def _export_report(report, markdown_path, sarif_path, html_path=None, json_path=None) -> None:
     import json
     from pathlib import Path
+    if html_path:
+        from sentinel.html_report import render_html
+        Path(html_path).write_text(render_html(report), encoding="utf-8")
+    if json_path:
+        Path(json_path).write_text(report.model_dump_json(indent=2), encoding="utf-8")
     if markdown_path:
         Path(markdown_path).write_text(report.summary_markdown, encoding="utf-8")
     if sarif_path:
@@ -149,6 +154,8 @@ def main():
         help="File path to export SARIF 2.1.0 report",
     )
 
+    parser.add_argument("--html", metavar="PATH", help="Write a standalone offline HTML viewer")
+    parser.add_argument("--json", metavar="PATH", help="Write the complete structured report")
     parser.add_argument("--markdown", metavar="PATH", help="Write the complete review as Markdown")
 
     parser.add_argument("--baseline", metavar="PATH", help="Compare repository quality findings with a saved baseline")
@@ -192,7 +199,7 @@ def main():
                 from sentinel.checks.report import attach_validation
                 attach_validation(report, run_checks(args.repo, selected_checks, args.check_image, args.check_timeout, args.requirements))
             print(report.summary_markdown)
-            _export_report(report, args.markdown, args.sarif)
+            _export_report(report, args.markdown, args.sarif, args.html, args.json)
             if args.save_baseline:
                 from sentinel.quality.baseline import save_baseline
                 save_baseline(report, args.save_baseline)
@@ -264,7 +271,7 @@ def main():
         from sentinel.quality.render import render_quality
         print(render_quality(report.quality_review))
 
-        _export_report(report, args.markdown, args.sarif)
+        _export_report(report, args.markdown, args.sarif, args.html, args.json)
         sys.exit(_outcome_exit_code(report.review_outcome))
     else:
         sys.stderr.write("Review completed with no report generated.\n")

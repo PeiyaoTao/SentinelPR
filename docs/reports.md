@@ -77,3 +77,19 @@ A passing test check means pytest completed successfully on the validation snaps
 - **SARIF 2.1.0:** code findings plus advisory specialist notes; validation adds a separate run. Critic audit is run metadata, not rejected code-scanning alerts. Quality results retain fingerprints, static rule prompts, and contextual decision properties.
 
 GitHub inline comments are anchored to eligible diff lines. Out-of-hunk observations remain in the summary. Suggested replacement syntax is checked before rendering a suggestion block; this does not establish behavioral correctness or guarantee every API publication succeeds.
+
+
+## Standalone HTML viewer
+
+```sh
+python -m sentinel.cli --repo . --provider heuristics --json review.json --html review.html
+python -m sentinel.html_report review.json --output review.html
+```
+
+Open the HTML file in your browser. It has no server requirement, external assets or network requests. Search and filter findings, advice, critic audit, metrics, validation and coverage. The full Markdown report remains available as plain text, and the embedded JSON can be downloaded without losing fields.
+
+Mark items reviewed or ignored to organize work. These marks are stored locally per report in browser storage, never change evidence or the gate verdict, and can be exported as a triage JSON file. If browser storage is unavailable, marks last only for the page session unless exported. They do not synchronize across users or revisions, and triage JSON import is not implemented.
+
+Repository and model text is rendered as text rather than HTML; embedded JSON is escaped and a restrictive content-security policy allows only the bundled script/style. Reports can still contain sensitive findings/source excerpts: share them deliberately.
+
+PR artifact bundles include `review.html`. The repository audit workflow exports HTML and JSON too. The viewer also labels [delegated feedback](delegation.md) as unverified external advice and shows supplied-excerpt coverage.

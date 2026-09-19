@@ -123,3 +123,22 @@ def do_work():
     symbol_names = [s.symbol_name for s in symbols]
     assert "do_work" in symbol_names
     assert "module_scope" in symbol_names
+
+
+
+def test_module_context_keeps_secret_location():
+    from sentinel.agents.security import analyze_symbol_security
+    source = "# header\n# context\nvalue = 1\napi_key = 'aDifferentCredential123456'\ntail = 2\n"
+    scope, = slice_ast_symbols("app.py", source, {4})
+    assert scope.code_snippet == "\n".join(source.splitlines()[scope.start_line - 1:scope.end_line])
+    finding, = analyze_symbol_security(scope)
+    assert finding.start_line == 4
+
+
+def test_syntax_fallback_keeps_secret_location():
+    from sentinel.agents.security import analyze_symbol_security
+    source = "not valid python!\n# context\napi_key = 'aDifferentCredential123456'\n"
+    scope, = slice_ast_symbols("app.py", source, {3})
+    assert (scope.start_line, scope.end_line) == (1, 3)
+    finding, = analyze_symbol_security(scope)
+    assert finding.start_line == 3

@@ -48,3 +48,43 @@ def test_fixture_does_not_hide_later_actual_secret(monkeypatch):
     result = review(f"write(path, 'core.py', {embedded!r})\napi_key = 'aDifferentCredential123456'\n", monkeypatch)
     assert len(result["verified_findings"]) == 1
     assert result["verified_findings"][0].start_line == 2
+
+
+@pytest.mark.parametrize("value", ["abcdefghijklmnop1234", "exampleCredentialValue12345"])
+def test_embedded_benchmark_placeholder_outside_tests(monkeypatch, value):
+    embedded = f"api_key = {value!r}\n"
+    source = f"CASES = [{{'files': {{'core.py': {embedded!r}}}}}]\n"
+    result = review(source, monkeypatch, "src/benchmarks/cases.py")
+    assert result["verified_findings"] == []
+    assert result["critic_audit"][0].deterministic_decision == "REJECT"
+    actual = review(embedded, monkeypatch)
+    assert actual["verified_findings"][0].severity == Severity.CRITICAL
+
+
+def test_actual_benchmark_file_through_pr_triage(monkeypatch):
+    from pathlib import Path
+    from sentinel.agents.triage import slice_ast_symbols
+    monkeypatch.setattr(default_config, "provider", "heuristics")
+    path = "src/sentinel/harness/behavior_cases.py"
+    source = Path(path).read_text(encoding="utf-8")
+    symbols = slice_ast_symbols(path, source, set(range(14, len(source.splitlines()) + 1)))
+    candidates = [f for symbol in symbols for f in analyze_symbol_security(symbol)]
+    assert len(candidates) == 2
+    lines = source.splitlines()
+    assert all("api_key =" in lines[f.start_line - 1] for f in candidates)
+    result = critic_agent_node({"candidate_findings": candidates, "head_files": {path: source}})
+    assert result["verified_findings"] == []
+    assert all(a.deterministic_decision == "REJECT" for a in result["critic_audit"])
+
+
+@pytest.mark.parametrize("value", ["aDifferentCredential123456", "AKIA" + "A" * 16])
+def test_benchmark_does_not_hide_unknown_or_provider_keys(monkeypatch, value):
+    source = f"CASES = [{('api_key = ' + repr(value))!r}]\n"
+    assert review(source, monkeypatch, "src/benchmarks/cases.py")["verified_findings"]
+
+
+def test_same_line_unknown_embedded_source_is_not_hidden(monkeypatch):
+    dummy = "api_key = 'abcdefghijklmnop1234'"
+    unknown = "api_key = 'aDifferentCredential123456'"
+    source = f"CASES = [{dummy!r}, {unknown!r}]\n"
+    assert review(source, monkeypatch, "src/benchmarks/cases.py")["verified_findings"]
