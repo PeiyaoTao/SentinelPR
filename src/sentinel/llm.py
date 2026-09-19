@@ -149,6 +149,14 @@ class LLMClient:
             if isinstance(usage, dict):
                 record["usage"] = {key: usage[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")
                                    if isinstance(usage.get(key), int) and usage[key] >= 0}
+            # Settle the reservation even if content validation later rejects
+            # the answer: reported completion tokens were still consumed.
+            completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+            if budget and type(completion_tokens) is int and completion_tokens >= 0:
+                budget.reserved_tokens += completion_tokens - payload["max_tokens"]
+                record["charged_output_tokens"] = completion_tokens
+            else:
+                record["charged_output_tokens"] = payload["max_tokens"]
             content = self._content(data)
             record["status"] = "completed"
             # Reduced-budget responses are not reused as full-budget answers.
