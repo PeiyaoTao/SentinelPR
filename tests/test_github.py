@@ -106,3 +106,21 @@ def test_invalid_revision_is_rejected(repo):
     root, base, _ = repo
     with pytest.raises(ValueError):
         load_pr_snapshot(root, base, "HEAD")
+
+
+
+def test_blocked_review_logs_outcome_and_validation(monkeypatch, tmp_path, repo, capsys):
+    from sentinel.checks.models import CheckResult, ValidationReport
+    configure(monkeypatch, tmp_path, repo)
+    monkeypatch.setenv("SENTINEL_PUBLISH", "false")
+    monkeypatch.setattr("sentinel.github._current_revision", lambda *a: True)
+    report = ConsolidatedReport(summary_markdown="Blocked", review_outcome=ReviewOutcome.CHANGES_REQUIRED,
+        accepted_findings_count=2, llm_usage=[{"status": "failed"}],
+        validation=ValidationReport(snapshot_id="test", results=[CheckResult(name="tests", status="passed", summary="ok")]))
+    monkeypatch.setattr("sentinel.github.review_pr", lambda *a, **k: {"consolidated_report": report})
+    with pytest.raises(SystemExit) as result:
+        run_github_auto_review()
+    assert result.value.code == 1
+    output = capsys.readouterr().out
+    assert "CHANGES_REQUIRED; exit code 1; retained findings=2; model calls incomplete=1" in output
+    assert "tests=passed" in output

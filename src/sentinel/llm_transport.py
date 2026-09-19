@@ -13,7 +13,10 @@ def main():
         result = response.json()
     except (requests.RequestException, ValueError) as error:
         # Never send provider bodies, credentials or source excerpts into logs.
-        json.dump({"transport_error": type(error).__name__}, sys.stdout)
+        result = {"transport_error": type(error).__name__}
+        if isinstance(error, requests.HTTPError) and error.response is not None:
+            result["http_status"] = error.response.status_code
+        json.dump(result, sys.stdout)
     else:
         json.dump(result, sys.stdout)
 

@@ -64,6 +64,14 @@ def resolve_llm_credentials(
     return resolved_provider, resolved_base_url, resolved_key, resolved_model
 
 
+class LLMResponseError(ValueError):
+    """A safe diagnostic code, never provider bodies or exception messages."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 class LLMClient:
     """Universal LLM client supporting local Ollama endpoints and cloud APIs."""
 
@@ -135,11 +143,13 @@ class LLMClient:
                                      input=json.dumps(request), capture_output=True, text=True,
                                      encoding="utf-8", timeout=timeout, check=True)
             data = json.loads(process.stdout)
-            content = self._content(data)
+            if not isinstance(data, dict):
+                raise LLMResponseError("invalid_response_shape")
             usage = data.get("usage")
             if isinstance(usage, dict):
                 record["usage"] = {key: usage[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")
                                    if isinstance(usage.get(key), int) and usage[key] >= 0}
+            content = self._content(data)
             record["status"] = "completed"
             # Reduced-budget responses are not reused as full-budget answers.
             if cached and payload["max_tokens"] == default_config.llm_max_output_tokens:
@@ -155,23 +165,35 @@ class LLMClient:
         except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, IndexError, RuntimeError) as error:
             if record["status"] != "budget_exhausted":
                 record["status"] = "timeout" if isinstance(error, subprocess.TimeoutExpired) else "failed"
+            record["error_code"] = error.code if isinstance(error, LLMResponseError) else type(error).__name__
             if budget:
                 budget.incomplete = True
-            raise RuntimeError(f"LLM request {record['status']} ({type(error).__name__}); no complete response available") from error
+            raise RuntimeError(f"LLM request {record['status']} ({record['error_code']}); no complete response available") from error
         finally:
             record["elapsed_seconds"] = round(time.monotonic() - started, 3)
-            print(f"SentinelPR LLM [{self.stage}]: {record['status']} after {record['elapsed_seconds']}s; usage={record['usage']}", flush=True)
+            print(f"SentinelPR LLM [{self.stage}]: {record['status']} after {record['elapsed_seconds']}s; usage={record['usage']}; error={record.get('error_code', 'none')}", flush=True)
 
     @staticmethod
     def _content(data):
+        if not isinstance(data, dict):
+            raise LLMResponseError("invalid_response_shape")
         if "transport_error" in data:
-            raise RuntimeError("Provider request failed")
+            status = data.get("http_status")
+            if isinstance(status, int) and 400 <= status <= 599:
+                raise LLMResponseError(f"http_{status}")
+            error = data["transport_error"]
+            safe_errors = {"Timeout", "ConnectTimeout", "ReadTimeout", "ConnectionError", "SSLError", "HTTPError", "JSONDecodeError"}
+            raise LLMResponseError(error if isinstance(error, str) and error in safe_errors else "transport_error")
         choice = data["choices"][0]
-        if choice.get("finish_reason") != "stop":
-            raise ValueError("Incomplete or unsupported completion finish reason")
+        if not isinstance(choice, dict):
+            raise LLMResponseError("invalid_response_shape")
+        reason = choice.get("finish_reason")
+        if reason != "stop":
+            code = f"finish_{reason}" if reason in ("length", "content_filter", "tool_calls", "function_call") else "unsupported_finish_reason"
+            raise LLMResponseError(code)
         content = choice["message"]["content"]
         if not isinstance(content, str) or not content.strip():
-            raise ValueError("Empty model response")
+            raise LLMResponseError("empty_response")
         return content
 
     def _cache_path(self, endpoint, payload):
