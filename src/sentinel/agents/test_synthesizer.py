@@ -115,7 +115,6 @@ def test_synthesis_node(state: PRReviewState) -> Dict[str, Any]:
         else:
             # SECURITY and ANTI_BLOAT findings are verified via static AST traces
             finding.proof_status = ProofStatus.STATIC_VERIFIED
-            finding.evidence_source = EvidenceSource.STATIC_AST
 
     return {
         "repro_tests": repro_tests,

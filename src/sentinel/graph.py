@@ -14,6 +14,7 @@ from sentinel.agents.security import security_agent_node
 from sentinel.agents.test_synthesizer import test_synthesis_node
 from sentinel.agents.triage import triage_agent_node
 from sentinel.state import PRReviewState
+from sentinel.llm_budget import bounded_review, set_review_snapshot
 from sentinel.quality.pipeline import quality_review_node
 from sentinel.quality.contextual import contextual_quality_node
 
@@ -69,6 +70,7 @@ def create_sentinel_graph():
     return builder.compile()
 
 
+@bounded_review
 def review_pr(
     diff: str,
     head_files: Dict[str, str],
@@ -100,11 +102,13 @@ def review_pr(
         "consolidated_report": None,
     }
 
+    set_review_snapshot({p: source for p, source in head_files.items() if p.endswith(".py")})
     graph = create_sentinel_graph()
     final_state = graph.invoke(initial_state)
     return final_state
 
 
+@bounded_review
 def review_repository(path=".", baseline_path=None) -> Dict[str, Any]:
     """Review a local project, including unchanged Python files and project-wide advice.
 
@@ -119,6 +123,7 @@ def review_repository(path=".", baseline_path=None) -> Dict[str, Any]:
     from sentinel.repository_report import repository_consolidator_node
 
     inventory, contents = collect_repository(path, default_config)
+    set_review_snapshot(contents)
     initial_state: PRReviewState = {
         "diff": "", "base_files": {}, "head_files": contents, "hunks": [],
         "changed_files": [], "symbols": [], "candidate_findings": [],

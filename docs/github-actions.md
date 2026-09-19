@@ -32,6 +32,10 @@ The workflows already request permissions; avoid broadening unrelated token perm
 | `SENTINEL_LLM_QUALITY` | `true` | Enable contextual quality advice |
 | `SENTINEL_QUALITY_MAX_GROUPS` | `5` | Maximum additional quality calls; `0` prevents calls |
 | `SENTINEL_QUALITY_CONTEXT_CHARS` | `18000` | Quality observation/excerpt payload budget |
+| `SENTINEL_LLM_TIMEOUT_SECONDS` | `180` | Hard per-request deadline |
+| `SENTINEL_LLM_REVIEW_SECONDS` | `600` | Shared model-review time window |
+| `SENTINEL_LLM_MAX_OUTPUT_TOKENS` | `8192` | Output cap per model response |
+| `SENTINEL_LLM_REVIEW_OUTPUT_TOKENS` | `65536` | Reserved output allowance across model calls |
 
 The YAML also contains some legacy secret fallbacks for configuration values; prefer variables for non-secret settings. A library environment variable is not automatically an Actions repository variable: only values explicitly forwarded by a workflow reach its process. For example, the provided workflows forward provider-specific keys, not the generic `SENTINEL_API_KEY` override.
 
@@ -57,3 +61,10 @@ The GitHub entry point checks that the PR is open and both base/head SHAs are cu
 Specialist quality observations remain advisory and do not themselves prevent approval. A `CLEAN` outcome only describes the supported checks; see [report interpretation](reports.md). If the review API rejects a submission, the entry point attempts an informational issue comment and retains the outcome's exit code.
 
 The provided workflow disables publication for fork and Dependabot PRs and attempts artifact upload even after failure. Missing model credentials can limit model review. PR artifacts are named `sentinel-pr-review`; manual audit artifacts are `sentinelpr-repo-review`. Manual Code Scanning upload is allowed to fail independently, so check that step's result rather than assuming a SARIF file was published.
+
+
+## Optional response reuse
+
+The PR workflow supports `SENTINEL_LLM_CACHE=true` for same-repository PRs only; it is disabled by default and unavailable to fork runs. Entries are stored outside the target checkout in the runner temporary directory and restored within the PR/base-revision cache scope. Exact-context validation and 24-hour expiry still apply inside SentinelPR. Enable only for trusted contributors: anyone able to modify the executed workflow or write the cache can influence cached model answers. See [cache and budget semantics](configuration.md#model-call-controls).
+
+Model budget settings are forwarded by both workflows. The 30-minute job timeout also covers environment preparation and validation; it is separate from model deadlines. Provider truncation and exhausted shared budgets are disclosed as incomplete model work, rather than silently approving the PR.

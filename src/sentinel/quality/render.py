@@ -42,13 +42,17 @@ def render_quality(review) -> str:
         lines += ["", "<details>", "<summary>Full advisory inventory and evidence</summary>", ""]
         for group in groups:
             lines += [f"### [{group[0].priority}] {group[0].subject}", ""]
+            lines += ["| Rule | Observation | Verification | Confidence | Status |", "| --- | --- | --- | --- | --- |"]
             for finding in group:
-                lines += [f"**{finding.title}**", "",
-                    f"**Rule:** `{finding.rule_id}` | **Verification:** {finding.verification_status} | **Confidence:** {finding.confidence} | **Status:** {finding.lifecycle}", "",
-                    finding.explanation, "", f"**Conditions:** {finding.trigger_conditions}", "",
-                    "**Evidence:**"]
-                lines += [f"- `{e.location.file_path}:{e.location.start_line}-{e.location.end_line}` ({e.kind}; source `{e.source_hash[:12]}`)" for e in finding.evidence]
-                lines += [""]
+                lines += [f"| `{finding.rule_id}` | {escape(finding.title)} | {finding.verification_status} | {finding.confidence} | {finding.lifecycle} |"]
+            lines += [""]
+            for text in dict.fromkeys(f.explanation for f in group):
+                lines += [text, ""]
+            conditions = list(dict.fromkeys(f.trigger_conditions for f in group))
+            lines += ["**Conditions:** " + "; ".join(conditions), "", "**Evidence:**"]
+            evidence = dict.fromkeys((e.location.file_path, e.location.start_line, e.location.end_line, e.kind, e.source_hash) for f in group for e in f.evidence)
+            lines += [f"- `{path}:{start}-{end}` ({kind}; source `{source_hash[:12]}`)" for path, start, end, kind, source_hash in evidence]
+            lines += [""]
             assessment = next((item for item in review.contextual_advice if group[0].fingerprint in item.fingerprints), None)
             if assessment is None or assessment.status != "reviewed":
                 lines += ["**Rule prompt (not contextually assessed):** " + " ".join(dict.fromkeys(f.recommendation for f in group)), ""]

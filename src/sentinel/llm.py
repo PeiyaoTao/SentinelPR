@@ -5,7 +5,14 @@ and cloud providers (OpenAI, Gemini, DeepSeek, Anthropic) via OpenAI-compatible 
 
 import os
 from typing import Any, Dict, List, Optional, Tuple
-import requests
+import json
+import hashlib
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+from sentinel.llm_budget import active_budget
 
 from sentinel.config import default_config
 
@@ -67,8 +74,10 @@ class LLMClient:
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
+        stage: str = "model",
     ):
         p, u, k, m = resolve_llm_credentials(provider, base_url, api_key, model)
+        self.stage = stage
         self.provider = p
         self.base_url = u
         self.api_key = k
@@ -83,42 +92,102 @@ class LLMClient:
         if self.provider == "heuristics":
             return ""
 
-        headers = {
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-
         payload: Dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
+            "model": self.model, "messages": messages, "temperature": self.temperature,
+            "max_tokens": default_config.llm_max_output_tokens,
         }
-
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
-
         endpoint = f"{self.base_url.rstrip('/')}/chat/completions"
-
+        budget = active_budget.get()
+        record: dict[str, Any] = {"stage": self.stage, "model": self.model, "status": "started", "elapsed_seconds": 0, "usage": None}
+        if budget:
+            budget.calls.append(record)
+            budget.pending_cache.pop(self.stage, None)
+        started = time.monotonic()
         try:
-            response = requests.post(
-                endpoint,
-                json=payload,
-                headers=headers,
-                timeout=default_config.llm_timeout_seconds,
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-        except requests.exceptions.RequestException as e:
-            # If endpoint fails or unreachable, surface informative error
-            raise RuntimeError(
-                f"Failed to connect to LLM provider '{self.provider}' at '{endpoint}': {str(e)}\n"
-                f"Make sure Ollama or your LLM server is running, or check your API key."
-            ) from e
+            cached = self._cache_path(endpoint, payload)
+            if cached and cached.exists() and time.time() - cached.stat().st_mtime < 86400:
+                data = json.loads(cached.read_text(encoding="utf-8"))
+                content = self._content(data)
+                record["status"] = "cached"
+                if budget:
+                    budget.pending_cache[self.stage] = cached
+                print(f"SentinelPR LLM [{self.stage}]: reused cached response ({self.model})", flush=True)
+                return content
+            timeout = float(default_config.llm_timeout_seconds)
+            if budget:
+                timeout = min(timeout, budget.remaining_seconds())
+                remaining = default_config.llm_review_output_tokens - budget.reserved_tokens
+                if timeout <= 0 or remaining <= 0:
+                    record["status"] = "budget_exhausted"
+                    raise RuntimeError("Shared LLM review budget exhausted")
+                payload["max_tokens"] = min(payload["max_tokens"], remaining)
+                # Reserve the full cap: failures can consume tokens without usage data.
+                budget.reserved_tokens += payload["max_tokens"]
+            record["output_token_cap"] = payload["max_tokens"]
+            print(f"SentinelPR LLM [{self.stage}]: starting {self.model}; deadline {timeout:.0f}s, output cap {payload['max_tokens']}", flush=True)
+            request = {"endpoint": endpoint, "headers": headers, "payload": payload, "timeout": timeout}
+            process = subprocess.run([sys.executable, "-m", "sentinel.llm_transport"],
+                                     input=json.dumps(request), capture_output=True, text=True,
+                                     encoding="utf-8", timeout=timeout, check=True)
+            data = json.loads(process.stdout)
+            content = self._content(data)
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                record["usage"] = {key: usage[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                                   if isinstance(usage.get(key), int) and usage[key] >= 0}
+            record["status"] = "completed"
+            # Reduced-budget responses are not reused as full-budget answers.
+            if cached and payload["max_tokens"] == default_config.llm_max_output_tokens:
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=cached.parent, delete=False) as temp:
+                    json.dump(data, temp)
+                    temporary = Path(temp.name)
+                temporary.replace(cached)
+                if budget:
+                    budget.pending_cache[self.stage] = cached
+            return content
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, IndexError, RuntimeError) as error:
+            if record["status"] != "budget_exhausted":
+                record["status"] = "timeout" if isinstance(error, subprocess.TimeoutExpired) else "failed"
+            if budget:
+                budget.incomplete = True
+            raise RuntimeError(f"LLM request {record['status']} ({type(error).__name__}); no complete response available") from error
+        finally:
+            record["elapsed_seconds"] = round(time.monotonic() - started, 3)
+            print(f"SentinelPR LLM [{self.stage}]: {record['status']} after {record['elapsed_seconds']}s; usage={record['usage']}", flush=True)
+
+    @staticmethod
+    def _content(data):
+        if "transport_error" in data:
+            raise RuntimeError("Provider request failed")
+        choice = data["choices"][0]
+        if choice.get("finish_reason") != "stop":
+            raise ValueError("Incomplete or unsupported completion finish reason")
+        content = choice["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Empty model response")
+        return content
+
+    def _cache_path(self, endpoint, payload):
+        if not default_config.llm_cache_dir:
+            return None
+        # All reviewer Python changes invalidate the cache. Prompts contain the
+        # exact selected code/context; no fuzzy matching or line-number reuse.
+        root = Path(__file__).parent
+        implementation = [(str(p.relative_to(root)), p.read_text(encoding="utf-8")) for p in sorted(root.rglob("*.py"))]
+        budget = active_budget.get()
+        policy = default_config.model_dump(exclude={"api_key", "llm_cache_dir"})
+        key = hashlib.sha256(json.dumps([endpoint, payload, implementation, policy, budget.snapshot if budget else ""], sort_keys=True).encode()).hexdigest()
+        return Path(default_config.llm_cache_dir) / (key + ".json")
 
 
-def get_llm_client(tier: str = "fast") -> LLMClient:
+def get_llm_client(tier: str = "fast", stage: str = "model") -> LLMClient:
     """Helper to get either fast or frontier model client."""
     model = default_config.frontier_model if tier == "frontier" else default_config.fast_model
-    return LLMClient(model=model)
+    return LLMClient(model=model, stage=stage)

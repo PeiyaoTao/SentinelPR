@@ -35,9 +35,14 @@ class SentinelConfig(BaseModel):
         description="Sampling temperature for LLM review consistency.",
     )
     llm_timeout_seconds: int = Field(
-        default=180,
+        default=180, gt=0,
         description="Timeout in seconds for LLM generation requests (useful for large local models).",
     )
+
+    llm_review_seconds: int = Field(default=600, gt=0)
+    llm_max_output_tokens: int = Field(default=8192, gt=0)
+    llm_review_output_tokens: int = Field(default=65536, gt=0)
+    llm_cache_dir: str = ""
 
     # Optional contextual criticism; model decisions never establish proof.
     llm_critic_enabled: bool = True
@@ -166,6 +171,16 @@ def load_config_from_env() -> SentinelConfig:
             values = cfg.model_dump()
             values[field] = int(os.environ[env])
             cfg = SentinelConfig.model_validate(values)
+
+    for env, field in (("SENTINEL_LLM_TIMEOUT_SECONDS", "llm_timeout_seconds"),
+                       ("SENTINEL_LLM_REVIEW_SECONDS", "llm_review_seconds"),
+                       ("SENTINEL_LLM_MAX_OUTPUT_TOKENS", "llm_max_output_tokens"),
+                       ("SENTINEL_LLM_REVIEW_OUTPUT_TOKENS", "llm_review_output_tokens")):
+        if env in os.environ:
+            values = cfg.model_dump()
+            values[field] = int(os.environ[env])
+            cfg = SentinelConfig.model_validate(values)
+    cfg.llm_cache_dir = os.getenv("SENTINEL_LLM_CACHE_DIR", "")
 
     # Explicit environment overrides always take precedence
     if os.getenv("SENTINEL_API_KEY"):

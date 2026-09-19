@@ -11,6 +11,8 @@ import requests
 from sentinel.graph import review_pr
 from sentinel.git_snapshot import load_pr_snapshot, materialize_commit
 from sentinel.state import ReviewOutcome
+from sentinel.pr_summary import render_pr_summary
+from sentinel.github_comments import reconcile_comments
 
 EXIT_CODES = {ReviewOutcome.CLEAN: 0, ReviewOutcome.CHANGES_REQUIRED: 1,
               ReviewOutcome.INCOMPLETE_REVIEW: 2, ReviewOutcome.INFRASTRUCTURE_FAILURE: 3}
@@ -77,13 +79,22 @@ def run_github_auto_review():
     if os.environ.get("SENTINEL_PUBLISH", "true").lower() == "false":
         print("Publication disabled; review artifacts retained.")
         sys.exit(EXIT_CODES[report.review_outcome])
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    artifact_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{run_id}" if run_id else None
+    body = render_pr_summary(report, head, artifact_url)
     event_type = review_event(report.review_outcome, bool(result.get("verified_findings")))
-    payload = {"commit_id": head, "body": report.summary_markdown, "event": event_type,
-               "comments": [{"path": c["path"], "line": c["line"], "side": c.get("side", "RIGHT"), "body": c["body"]} for c in report.inline_comments]}
+    comments = reconcile_comments(url, headers, report.inline_comments, head,
+                                  report.review_outcome in {ReviewOutcome.CLEAN, ReviewOutcome.CHANGES_REQUIRED}
+                                  and not report.uninspected_files
+                                  and not any(c["status"] not in {"completed", "cached"} for c in report.llm_usage)
+                                  and (report.quality_review is None or report.quality_review.complete),
+                                  retained_notes=report.out_of_hunk_notes)
+    payload = {"commit_id": head, "body": body, "event": event_type,
+               "comments": [{"path": c["path"], "line": c["line"], "side": c.get("side", "RIGHT"), "body": c["body"]} for c in comments]}
     response = requests.post(url + "/reviews", json=payload, headers=headers, timeout=30)
     if response.status_code not in (200, 201):
         # A fallback comment is informational; CI still uses the review outcome.
-        fallback = requests.post(url.replace(f"/pulls/{number}", f"/issues/{number}") + "/comments", json={"body": report.summary_markdown}, headers=headers, timeout=30)
+        fallback = requests.post(url.replace(f"/pulls/{number}", f"/issues/{number}") + "/comments", json={"body": body}, headers=headers, timeout=30)
         fallback.raise_for_status()
     sys.exit(EXIT_CODES[report.review_outcome])
 

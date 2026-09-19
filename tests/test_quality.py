@@ -320,3 +320,21 @@ def test_baseline_rejects_source_paths_outside_project(tmp_path):
     baseline.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="inside the repository"):
         review_repository(tmp_path, baseline)
+
+
+@pytest.mark.parametrize("nested", [
+    "class Inner:\n        def helper(self): return 2",
+    "def inner():\n        def helper(): return 2",
+])
+def test_nested_definition_does_not_shadow_outer_global_call(nested):
+    source = "def helper(): return 1\ndef caller():\n    " + nested + "\n    return helper()\n"
+    index = RepositoryIndex({"core.py": source})
+    caller = next(s for s in index.functions() if s.qualified_name == "caller")
+    assert [s.qualified_name for s in index.get_callees(caller.id)] == ["helper"]
+
+
+def test_conditional_local_definition_still_shadows_global_call():
+    source = "def helper(): return 1\ndef caller(flag):\n    if flag:\n        def helper(): return 2\n    return helper()\n"
+    index = RepositoryIndex({"core.py": source})
+    caller = next(s for s in index.functions() if s.qualified_name == "caller")
+    assert index.get_callees(caller.id) == []

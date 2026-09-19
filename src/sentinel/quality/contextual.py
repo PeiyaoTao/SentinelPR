@@ -3,6 +3,7 @@ import json
 from typing import Any
 from sentinel.config import default_config
 from sentinel.llm import get_llm_client
+from sentinel.llm_budget import invalid_model_response
 from sentinel.quality.models import AdviceDecision, ContextualAdvice, QualityFinding, QualityReview, SourceLocation
 from sentinel.quality.ranking import group_observations, review_selection
 
@@ -76,10 +77,11 @@ def assess_group(group, index, config, client=None) -> tuple[ContextualAdvice, b
         item.limitation = "Complete observed source did not fit the context budget; no change recommendation established."
         return item, False
     try:
-        reviewer = client if client is not None else get_llm_client(tier="frontier")
+        reviewer = client if client is not None else get_llm_client(tier="frontier", stage="quality")
         raw = reviewer.complete([{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps(payload)}], json_mode=True)
         item.decision = validate_decision(raw, payload, group)
     except (RuntimeError, ValueError, KeyError, TypeError, IndexError) as error:
+        invalid_model_response("quality")
         item.status = "unavailable"
         item.limitation = f"Contextual quality review unavailable or invalid ({type(error).__name__}); static observation retained."
     else:

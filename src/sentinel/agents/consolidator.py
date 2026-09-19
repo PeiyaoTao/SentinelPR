@@ -153,7 +153,7 @@ def consolidator_agent_node(state: PRReviewState) -> Dict[str, Any]:
             comment_body += f"**Suggested Fix**:\n{finding.remediation_guidance or finding.suggested_fix}\n\n"
 
         if finding.critic_reasoning:
-            comment_body += f"> *Critic Gate Verdict: {finding.critic_reasoning}*"
+            comment_body += f"<details><summary>Evidence and critic decision</summary>\n\n{finding.critic_reasoning}\n\n</details>"
 
         # Diff Offset Validation (Prevents GitHub 422 Error)
         if target_line in valid_lines:
