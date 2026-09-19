@@ -15,6 +15,7 @@ from sentinel.state import (
     ProofStatus,
     Severity,
     TrustZone,
+    EvidenceSource,
 )
 
 
@@ -33,14 +34,15 @@ def analyze_symbol_security(symbol: ASTSymbolScope) -> List[Finding]:
 
     # Check 1: Hardcoded Secrets
     for pattern, title in SECRET_PATTERNS:
-        match = pattern.search(code)
-        if match:
+        for match in pattern.finditer(code):
             # Estimate line number from offset
             line_offset = code[: match.start()].count("\n")
             lineno = symbol.start_line + line_offset
             findings.append(
                 Finding(
                     id=f"SEC-{uuid.uuid4().hex[:8]}",
+                    rule_id="security.aws-key" if title == "Hardcoded AWS Access Key" else "security.secret-pattern",
+                    evidence_source=EvidenceSource.STATIC_PATTERN,
                     category=FindingCategory.SECURITY,
                     severity=Severity.CRITICAL,
                     file_path=symbol.file_path,

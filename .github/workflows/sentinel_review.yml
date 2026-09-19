@@ -66,17 +66,31 @@ jobs:
             echo "No Dockerfile.checks found; skipping container check image build."
           fi
 
+      - name: Restore exact-context model responses (opt-in)
+        if: vars.SENTINEL_LLM_CACHE == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sentinel-llm-cache
+          key: sentinel-llm-${{ runner.os }}-${{ github.event.pull_request.number }}-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            sentinel-llm-${{ runner.os }}-${{ github.event.pull_request.number }}-${{ github.event.pull_request.base.sha }}-
+
       - name: Run review and project validation
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SENTINEL_TARGET_PATH: target
           SENTINEL_REPORT_DIR: sentinel-artifacts
+          SENTINEL_LLM_CACHE_DIR: ${{ vars.SENTINEL_LLM_CACHE == 'true' && github.event.pull_request.head.repo.full_name == github.repository && format('{0}/sentinel-llm-cache', runner.temp) || '' }}
           SENTINEL_CHECKS: all
           SENTINEL_CHECK_IMAGE: sentinel-checks:local
           SENTINEL_PUBLISH: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
           SENTINEL_LLM_PROVIDER: ${{ vars.SENTINEL_LLM_PROVIDER || secrets.SENTINEL_LLM_PROVIDER || '' }}
           SENTINEL_LLM_CRITIC: ${{ vars.SENTINEL_LLM_CRITIC || 'true' }}
           SENTINEL_LLM_QUALITY: ${{ vars.SENTINEL_LLM_QUALITY || 'true' }}
+          SENTINEL_LLM_TIMEOUT_SECONDS: ${{ vars.SENTINEL_LLM_TIMEOUT_SECONDS || '180' }}
+          SENTINEL_LLM_REVIEW_SECONDS: ${{ vars.SENTINEL_LLM_REVIEW_SECONDS || '600' }}
+          SENTINEL_LLM_MAX_OUTPUT_TOKENS: ${{ vars.SENTINEL_LLM_MAX_OUTPUT_TOKENS || '8192' }}
+          SENTINEL_LLM_REVIEW_OUTPUT_TOKENS: ${{ vars.SENTINEL_LLM_REVIEW_OUTPUT_TOKENS || '65536' }}
           SENTINEL_QUALITY_MAX_GROUPS: ${{ vars.SENTINEL_QUALITY_MAX_GROUPS || '5' }}
           SENTINEL_QUALITY_CONTEXT_CHARS: ${{ vars.SENTINEL_QUALITY_CONTEXT_CHARS || '18000' }}
           SENTINEL_BASE_URL: ${{ vars.SENTINEL_BASE_URL || '' }}

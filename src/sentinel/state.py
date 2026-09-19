@@ -226,6 +226,7 @@ class ConsolidatedReport(BaseModel):
     critic_limitations: List[str] = Field(default_factory=list)
     quality_review: Optional[QualityReview] = None
     validation: Optional[ValidationReport] = None
+    llm_usage: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class PRReviewState(TypedDict, total=False):

@@ -41,7 +41,21 @@ Replace the model placeholder before running. In Bash, set the same variables wi
 | Contextual quality advice | 5 | 18,000 characters of serialized observations/excerpts; system instructions are additional | `--no-llm-quality` or `SENTINEL_LLM_QUALITY=false` |
 | Repository project assessment | 1 | 48,000 characters of serialized project context; system instructions are additional | Select `heuristics` to disable all model stages |
 
-Thus defaults allow up to 13 calls in PR mode and 14 in repository mode, with fewer calls when there are no eligible findings or context is unavailable. The default request timeout is 180 seconds per call. These are call/context limits, not token or monetary guarantees.
+Stage budgets allow up to 13 calls in PR mode and 14 in repository mode, but shared time/output budgets can stop model work earlier. Static analysis and executable validation continue. Security/correctness candidates are prioritized before lower-severity advice.
+
+| Environment variable | Default | Scope |
+| --- | --- | --- |
+| `SENTINEL_LLM_TIMEOUT_SECONDS` | `180` | Hard deadline for each request worker, including provider keepalives |
+| `SENTINEL_LLM_REVIEW_SECONDS` | `600` | Wall-clock window from review start for model requests; excludes subsequent executable validation |
+| `SENTINEL_LLM_MAX_OUTPUT_TOKENS` | `8192` | Provider `max_tokens` per response |
+| `SENTINEL_LLM_REVIEW_OUTPUT_TOKENS` | `65536` | Shared output allowance; each attempted call reserves its full cap, including failed requests |
+| `SENTINEL_LLM_CACHE_DIR` | Empty (disabled) | Optional persistent directory for exact-context response reuse |
+
+Deadlines terminate the local HTTP worker. They cannot guarantee the provider immediately stops remote generation or billing. Output limits do not cover input tokens or guarantee a monetary cost; reasoning-token accounting depends on the endpoint. Use reported usage to tune these limits, especially for reasoning models. A deeper review can increase these values and `SENTINEL_QUALITY_MAX_GROUPS` explicitly.
+
+Each request logs its stage, deadline, completion status, duration and numeric provider-reported usage. JSON/SARIF retain the accounting; missing usage remains unavailable. Timeout, shared-budget exhaustion, truncation or invalid model output prevents an otherwise CLEAN review from being reported complete. Existing blocking findings retain precedence. Per-stage selection budgets still disclose unassessed observations separately.
+
+Cache entries expire after 24 hours. Reuse requires matching endpoint, model, parameters, exact prompt/excerpts, reviewer implementation, configuration and supplied source snapshot (Python files for PR review, all collected files for repository review). This permits repeated documentation-only PR revisions to reuse unchanged code analysis. Cached responses still undergo normal schema/citation validation. Use a trusted cache directory: entries contain model responses and may contain source excerpts or sensitive findings. Do not let target code or untrusted contributors write it. Failed/incomplete transports are not cached. Contextual schema/citation rejection during a review also removes that response from the cache.
 
 `SENTINEL_QUALITY_MAX_GROUPS` changes the quality call budget; `0` prevents calls. `SENTINEL_QUALITY_CONTEXT_CHARS` changes its context budget and must be at least `1000`. Boolean switches accept `true` or `false` case-insensitively. Invalid values fail configuration loading.
 

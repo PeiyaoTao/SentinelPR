@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from sentinel.config import default_config
 from sentinel.llm import get_llm_client
+from sentinel.llm_budget import invalid_model_response
 from sentinel.quality.index import RepositoryIndex
 from sentinel.state import CriticAudit, CriticCitation, CriticDecision, Finding, FindingCategory, PRReviewState, ProofStatus, Severity, TrustZone
 
@@ -31,7 +32,7 @@ def evaluate_candidate_finding(finding: Finding) -> Finding:
         finding.severity = Severity.MEDIUM
         finding.critic_decision = CriticDecision.DOWNGRADE
         finding.critic_reasoning = "Advisory hypothesis: high potential impact is not evidence; verification is absent or inconclusive."
-    elif "test" in finding.file_path.lower() and finding.category == FindingCategory.SECURITY:
+    elif "test" in finding.file_path.lower() and finding.category == FindingCategory.SECURITY and finding.rule_id not in {"security.secret-pattern", "security.aws-key"}:
         finding.severity = Severity.LOW
         finding.critic_decision = CriticDecision.DOWNGRADE
         finding.critic_reasoning = "Downgraded: Security finding is in a test/mock file; check whether the value is genuine."
@@ -96,7 +97,7 @@ def consult_llm_critic(finding: Finding, excerpts: list[dict[str, Any]]) -> Mode
                  "file_path": finding.file_path, "line": finding.start_line,
                  "severity": finding.severity.value, "proof_status": finding.proof_status.value,
                  "hypothesis": finding.hypothesis, "trust_zone": finding.trust_zone.value}
-    raw = get_llm_client(tier="frontier").complete([
+    raw = get_llm_client(tier="frontier", stage="critic").complete([
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps({"finding": candidate, "excerpts": excerpts})},
     ], json_mode=True)
@@ -117,6 +118,40 @@ def _valid_concurrency_source(finding: Finding, state: PRReviewState) -> bool:
         return False
     return any(node.lineno == finding.start_line for node, _ in global_mutations(tree))
 
+
+
+def synthetic_secret_fixture(finding: Finding, state: PRReviewState) -> bool:
+    """Recognize embedded test-source assignments, never actual credential values."""
+    from sentinel.repository import is_test_file
+    from sentinel.agents.security import SECRET_PATTERNS
+    if finding.title != "Hardcoded Credential/Secret" or not is_test_file(finding.file_path):
+        return False
+    try:
+        tree = ast.parse(state.get("head_files", {}).get(finding.file_path, ""))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if not node.lineno <= finding.start_line <= (node.end_lineno or node.lineno):
+            continue
+        if SECRET_PATTERNS[1][0].search(node.value):
+            continue
+        try:
+            embedded = ast.parse(node.value)
+        except (SyntaxError, ValueError):
+            continue
+        dummy_assignments = [n for n in embedded.body if isinstance(n, (ast.Assign, ast.AnnAssign))
+                             and isinstance(n.value, ast.Constant)
+                             and n.value.value == "abcdefghijklmnop1234"]
+        if dummy_assignments and all("abcdefghijklmnop1234" in m.group() for m in SECRET_PATTERNS[0][0].finditer(node.value)):
+            actual = [n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign))
+                      and n.lineno == finding.start_line
+                      and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
+                      and n.value is not node]
+            if not actual:
+                return True
+    return False
 
 
 def apply_model_decision(finding: Finding, decision: ModelDecision, limitations: list[str]) -> bool:
@@ -149,6 +184,7 @@ def contextual_review(finding: Finding, state: PRReviewState, index: RepositoryI
     try:
         decision = consult_llm_critic(finding, excerpts)
     except (ValueError, RuntimeError, KeyError, TypeError, IndexError) as error:
+        invalid_model_response("critic")
         audit.model_status = "unavailable"
         limitations.append(f"LLM critic unavailable or invalid response ({type(error).__name__}); deterministic evidence retained.")
         return True, True
@@ -179,7 +215,10 @@ def critic_agent_node(state: PRReviewState) -> Dict[str, Any]:
     calls = 0
     enabled = default_config.provider != "heuristics" and default_config.llm_critic_enabled
     index = state.get("quality_index")
-    for candidate in state.get("candidate_findings", []):
+    priority = {Severity.CRITICAL: 0, Severity.HIGH: 1, Severity.MEDIUM: 2, Severity.LOW: 3, Severity.SUGGESTION: 4}
+    candidates = sorted(state.get("candidate_findings", []),
+                        key=lambda f: (priority[f.severity], f.category != FindingCategory.SECURITY))
+    for candidate in candidates:
         audit = CriticAudit(finding_id=candidate.id, rule_id=candidate.rule_id or candidate.category.value,
                             title=candidate.title, claim=candidate.explanation, file_path=candidate.file_path, line=candidate.start_line,
                             original_severity=candidate.severity, final_severity=candidate.severity,
@@ -199,6 +238,9 @@ def critic_agent_node(state: PRReviewState) -> Dict[str, Any]:
                 continue  # No actual operation at the cited line: reject before any LLM call.
             finding.hypothesis = True
         finding = evaluate_candidate_finding(finding)
+        if synthetic_secret_fixture(finding, state):
+            finding.critic_decision = CriticDecision.REJECT
+            finding.critic_reasoning = "Rejected: generic secret assignment is embedded in synthetic test source; the pattern match does not establish credential exposure. Provider-shaped secrets are scanned separately."
         record_evidence_decision(audit, finding)
         audit.deterministic_decision = audit.decision
         audit.deterministic_reason = audit.reason

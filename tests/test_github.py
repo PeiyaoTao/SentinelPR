@@ -61,6 +61,7 @@ def configure(monkeypatch, tmp_path, repo):
     event.write_text(json.dumps({"pull_request": {"number": 1, "head": {"sha": head}, "base": {"sha": base}}}))
     for key, value in {"GITHUB_TOKEN": "test", "GITHUB_REPOSITORY": "owner/repo", "GITHUB_EVENT_PATH": str(event), "SENTINEL_TARGET_PATH": str(root), "SENTINEL_REPORT_DIR": str(tmp_path / "artifacts"), "SENTINEL_CHECKS": ""}.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.setattr("sentinel.github_comments.requests.get", lambda *a, **k: SimpleNamespace(raise_for_status=lambda: None, json=lambda: []))
     return head, base
 
 

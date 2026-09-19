@@ -65,3 +65,21 @@ def test_same_symbol_metrics_group_without_losing_sarif_evidence():
     sarif = append_quality_sarif(generate_sarif([]), review)
     assert len(sarif["runs"][0]["results"]) == len(metrics)
     assert {r["partialFingerprints"]["sentinelQuality/v1"] for r in sarif["runs"][0]["results"]} == {f.fingerprint for f in metrics}
+
+
+
+def test_github_summary_does_not_duplicate_inventory_or_hide_coverage():
+    from sentinel.pr_summary import render_pr_summary
+    from sentinel.quality.models import ContextualAdvice
+    review = QualityReview(snapshot_id="abc", policy_id="test", analyzed_files=["app.py"], specialists=["maintainability"],
+                           contextual_advice=[ContextualAdvice(fingerprints=[str(i)], subject=f"app.f{i}", status="budget_exhausted") for i in range(100)])
+    report = ConsolidatedReport(summary_markdown="Very long full evidence. " * 10000,
+                                quality_review=review, uninspected_files=["ui.ts"],
+                                review_outcome=ReviewOutcome.INCOMPLETE_REVIEW)
+    text = render_pr_summary(report, "abcd", "https://github.com/o/r/actions/runs/1")
+    assert len(text) < 2000
+    assert "0/100" in text and "budget_exhausted: 100" in text
+    assert "Uninspected files" in text and "INCOMPLETE_REVIEW" in text
+    assert "https://github.com/o/r/actions/runs/1" in text
+    assert "Very long full evidence" not in text
+    assert len(report.summary_markdown) > 100000

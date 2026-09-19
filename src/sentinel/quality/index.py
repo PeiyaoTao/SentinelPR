@@ -21,6 +21,15 @@ def scoped_nodes(node):
             yield from scoped_nodes(child)
 
 
+def local_definition_names(node):
+    """Collect local definition bindings without entering nested scopes."""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            yield child.name
+        elif not isinstance(child, ast.Lambda):
+            yield from local_definition_names(child)
+
+
 @dataclass(frozen=True)
 class Symbol:
     id: str
@@ -149,8 +158,7 @@ class RepositoryIndex:
         shadows = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
         shadows.update(a.arg for a in (args.vararg, args.kwarg) if a)
         shadows.update(n.id for n in scoped_nodes(symbol.node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store))
-        shadows.update(n.name for n in ast.walk(symbol.node)
-                       if n is not symbol.node and isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+        shadows.update(local_definition_names(symbol.node))
         if parts[0] in shadows:
             return None
         binding = self.bindings[path].get(parts[0])

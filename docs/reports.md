@@ -4,6 +4,14 @@
 
 Read the outcome, scope gaps, and validation status first. The executive summary is generated from recorded findings and checks. Attaching validation refreshes it; a previous model summary cannot substitute for tool results.
 
+## GitHub summary and full evidence
+
+The GitHub review contains the outcome, validation status, up to three optional improvements, and coverage/audit counts. Its workflow link leads to the full `sentinel-pr-review` artifact. Metric inventories, KEEP explanations, repeated source evidence and the complete critic audit stay in Markdown/JSON/SARIF exports. Metrics on the same symbol share evidence and conditions in the Markdown inventory.
+
+Location-specific code findings remain inline, with critic details collapsed. On later revisions, SentinelPR updates its marked bot comments when their anchors remain current and creates new comments for outdated anchors. After a completed review, absent findings are labelled no longer retained; this is not proof they were fixed. Incomplete reviews do not retire old findings. Older comments without SentinelPR markers are left untouched.
+
+The secret critic rejects the known synthetic `abcdefghijklmnop1234` fixture only when embedded as Python source in a test string. It records the rejection and skips the model call. Ordinary credential assignments, unknown values and AWS-shaped keys in tests remain candidates. A static pattern match does not establish that a credential is live.
+
 ## Outcomes and exit codes
 
 | Outcome | Exit code | Meaning |
